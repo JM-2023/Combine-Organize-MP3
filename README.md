@@ -1,2 +1,2 @@
-# Combine-MP3
-Combine mp3 by date
+# Combine-Organize-MP3
+Combine and Organize mp3 by date
