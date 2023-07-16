@@ -28,6 +28,8 @@ def process_files(date, files):
     # Sort the list based on time in the filename
     files.sort(key=lambda x: parse_time_from_filename(x))
 
+    print(f"Sorted list for {date.strftime('%Y-%m-%d')} is {files}")  # Print the sorted list
+
     audio_clips = [AudioFileClip(os.path.join(directory, mp3_file)) for mp3_file in files]
 
     final_clip = concatenate_audioclips(audio_clips)
