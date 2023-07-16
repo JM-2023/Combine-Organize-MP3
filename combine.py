@@ -19,19 +19,28 @@ for mp3_file in mp3_files:
     if len(parts) < 2:
         continue  # Skip files that don't have the expected format
 
-    date_string = parts[1]
+    date_string = parts[0]
     date = datetime.strptime(date_string, "%Y-%m-%d").date()
 
     grouped_files[date].append(mp3_file)
 
 def process_files(date, files):
     # Sort the list based on time in the filename
-    files.sort(key=lambda x: datetime.strptime(os.path.splitext(x.split(" ")[2])[0], "%H-%M-%S-%f"))
+    files.sort(key=lambda x: parse_time_from_filename(x))
 
     audio_clips = [AudioFileClip(os.path.join(directory, mp3_file)) for mp3_file in files]
 
     final_clip = concatenate_audioclips(audio_clips)
     final_clip.write_audiofile(os.path.join(directory, f"{date.strftime('%Y%m%d')}.mp3"))
+
+def parse_time_from_filename(filename):
+    time_str = os.path.splitext(filename.split(" ")[1])[0]
+    try:
+        # Try to parse time with milliseconds
+        return datetime.strptime(time_str, "%H-%M-%S-%f")
+    except ValueError:
+        # If it fails, parse time without milliseconds
+        return datetime.strptime(time_str, "%H-%M-%S")
 
 # Process files concurrently
 with ThreadPoolExecutor() as executor:
