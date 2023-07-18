@@ -41,8 +41,13 @@ def parse_time_from_filename(filename):
         # Try to parse time with milliseconds
         return datetime.strptime(time_str, "%H-%M-%S-%f")
     except ValueError:
-        # If it fails, parse time without milliseconds
-        return datetime.strptime(time_str, "%H-%M-%S")
+        try:
+            # If it fails, parse time without milliseconds
+            return datetime.strptime(time_str, "%H-%M-%S")
+        except ValueError:
+            # If it fails again, parse time without seconds
+            return datetime.strptime(time_str, "%H-%M")
+
 
 # Process files concurrently
 with ThreadPoolExecutor() as executor:
