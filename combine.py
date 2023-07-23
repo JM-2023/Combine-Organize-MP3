@@ -30,7 +30,13 @@ def process_files(date, files):
 
     print(f"Sorted list for {date.strftime('%Y-%m-%d')} is {files}")  # Print the sorted list
 
-    audio_clips = [AudioFileClip(os.path.join(directory, mp3_file)) for mp3_file in files]
+    audio_clips = []
+    for mp3_file in files:
+        audio_clip = AudioFileClip(os.path.join(directory, mp3_file))
+        if audio_clip.duration > 0:
+            audio_clips.append(audio_clip)
+        else:
+            print(f"Skipping zero-duration clip: {mp3_file}")
 
     final_clip = concatenate_audioclips(audio_clips)
     final_clip.write_audiofile(os.path.join(directory, f"{date.strftime('%Y%m%d')}.mp3"))
