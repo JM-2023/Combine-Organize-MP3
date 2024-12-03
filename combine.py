@@ -113,30 +113,42 @@ def select_files_to_merge():
     print("\nAvailable dates:")
     for i, date in enumerate(dates, 1):
         print(f"{i}. {date.strftime('%Y-%m-%d')} ({len(grouped_files[date])} files)")
+        print(f"{i}a. Merge all files for {date.strftime('%Y-%m-%d')}")
 
     # Select date
     while True:
         try:
-            date_choice = int(input("\nSelect a date (number) or 0 to exit: "))
-            if date_choice == 0:
+            choice = input("\nSelect a choice (number or number+a) or 0 to exit: ").strip().lower()
+            if choice == '0':
                 return None
-            if 1 <= date_choice <= len(dates):
-                selected_date = dates[date_choice - 1]
-                break
+                
+            # Check if it's a "merge all" choice
+            if choice.endswith('a'):
+                try:
+                    date_num = int(choice[:-1])
+                    if 1 <= date_num <= len(dates):
+                        selected_date = dates[date_num - 1]
+                        # Return all files for the selected date, sorted by time
+                        return selected_date, sorted(grouped_files[selected_date], 
+                                                  key=parse_time_from_filename)
+                except ValueError:
+                    print("Invalid selection. Please try again.")
+                    continue
+            else:
+                # Regular selection for individual file choosing
+                date_choice = int(choice)
+                if 1 <= date_choice <= len(dates):
+                    selected_date = dates[date_choice - 1]
+                    # Get files for selected date and use interactive selection
+                    files = sorted(grouped_files[selected_date], key=parse_time_from_filename)
+                    selected_files = interactive_file_selection(files)
+                    if selected_files is None or not selected_files:
+                        return None
+                    return selected_date, selected_files
+                
             print("Invalid selection. Please try again.")
         except ValueError:
-            print("Please enter a valid number.")
-
-    # Get files for selected date and sort them
-    files = sorted(grouped_files[selected_date], key=parse_time_from_filename)
-    
-    # Use interactive selection
-    selected_files = interactive_file_selection(files)
-    
-    if selected_files is None or not selected_files:
-        return None
-        
-    return selected_date, selected_files
+            print("Please enter a valid number or number+a (e.g., '1' or '1a').")
 
 def process_files(date, files):
     # Sort the list based on time in the filename
