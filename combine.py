@@ -9,6 +9,19 @@ import sys
 
 directory = os.getcwd()  # Current directory
 
+# ANSI Escape Code Definitions
+RESET = "\033[0m"
+BOLD = "\033[1m"
+UNDERLINE = "\033[4m"
+RED = "\033[31m"
+GREEN = "\033[32m"
+YELLOW = "\033[33m"
+BLUE = "\033[34m"
+MAGENTA = "\033[35m"
+CYAN = "\033[36m"
+WHITE = "\033[37m"
+BG_BLUE = "\033[44m"
+
 # List comprehension to get all mp3 files
 mp3_files = [f for f in os.listdir(directory) if f.endswith('.mp3')]
 
@@ -24,7 +37,6 @@ def parse_time_from_filename(filename):
         except ValueError:
             # If it fails, parse time without seconds
             time = datetime.strptime(time_str, "%H-%M").time()
-
         return datetime.combine(date, time)
     else:
         return None
@@ -41,7 +53,6 @@ def parse_date_and_time_from_filename(filename):
         except ValueError:
             # If it fails, parse time without seconds
             time = datetime.strptime(time_str, "%H-%M").time()
-
         return date, time
     else:
         return None, None
@@ -52,16 +63,21 @@ def clear_screen():
 def print_file_list(files, selected_files, current_index):
     """Print the file list with checkboxes and highlight the current selection"""
     clear_screen()
-    print("\nSelect files to merge (Use ↑↓ to navigate, Space to select/deselect, Enter to confirm):\n")
+    # Instructions in bold blue
+    print(f"\n{BOLD}{BLUE}Select files to merge (Use ↑↓ to navigate, Space to select/deselect, Enter to confirm):{RESET}\n")
     for i, file in enumerate(files):
-        checkbox = '[x]' if file in selected_files else '[ ]'
+        # Green for selected [x], Red for [ ]
+        checkbox = f"{GREEN}[x]{RESET}" if file in selected_files else f"{RED}[ ]{RESET}"
         if i == current_index:
-            print(f"\033[7m{checkbox} {file}\033[0m")  # Highlighted
+            # Highlight the current line with a blue background
+            print(f"{BG_BLUE}{checkbox} {file}{RESET}")
         else:
             print(f"{checkbox} {file}")
     
-    print("\nSelected files:", len(selected_files))
-    print("\nPress 'q' to quit, 'a' to select all, 'd' to deselect all")
+    # Show the count of selected files in bold yellow
+    print(f"\n{BOLD}{YELLOW}Selected files:{RESET}", len(selected_files))
+    # Instructions for other keys
+    print(f"\nPress '{RED}q{RESET}' to quit, '{GREEN}a{RESET}' to select all, '{RED}d{RESET}' to deselect all")
 
 def interactive_file_selection(files):
     """
@@ -129,8 +145,7 @@ def select_files_to_merge():
                     if 1 <= date_num <= len(dates):
                         selected_date = dates[date_num - 1]
                         # Return all files for the selected date, sorted by time
-                        return selected_date, sorted(grouped_files[selected_date], 
-                                                  key=parse_time_from_filename)
+                        return selected_date, sorted(grouped_files[selected_date], key=parse_time_from_filename)
                 except ValueError:
                     print("Invalid selection. Please try again.")
                     continue
@@ -183,10 +198,10 @@ def process_files(date, files):
     # Format the date and time for the output filename
     output_filename = f"{first_clip_date.strftime('%Y%m%d')} {first_clip_time.strftime('%H-%M')}.mp3"
 
-    print(f"\nMerging files into: {output_filename}")
+    print(f"\n{BOLD}{GREEN}Merging files into: {output_filename}{RESET}")
     final_clip = concatenate_audioclips(audio_clips)
     final_clip.write_audiofile(os.path.join(directory, output_filename))
-    print(f"Merge complete! Output saved as: {output_filename}")
+    print(f"{BOLD}{CYAN}Merge complete! Output saved as: {output_filename}{RESET}")
 
 # Group files by date
 grouped_files = defaultdict(list)
@@ -197,8 +212,8 @@ for mp3_file in mp3_files:
         grouped_files[date].append(mp3_file)
 
 def main():
-    print("MP3 File Merger")
-    print("===============")
+    print(f"{BOLD}{YELLOW}MP3 File Merger{RESET}")
+    print(f"{'=' * 15}")
     
     if not mp3_files:
         print("No MP3 files found in the current directory.")
@@ -215,7 +230,7 @@ def main():
         if input("\nWould you like to merge more files? (y/n): ").lower() != 'y':
             break
 
-    print("\nThank you for using MP3 File Merger!")
+    print(f"\n{BOLD}{GREEN}Thank you for using MP3 File Merger!{RESET}")
 
 if __name__ == "__main__":
     main()
