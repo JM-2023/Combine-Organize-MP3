@@ -60,35 +60,48 @@ def parse_date_and_time_from_filename(filename):
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
 
-def print_file_list(files, selected_files, current_index):
-    """Print the file list with checkboxes and highlight the current selection"""
+def print_file_list(files, selected_files, merged_files, current_index):
+    """Print the file list with checkboxes and highlight the current selection.
+       Already merged files appear in MAGENTA and cannot be selected again.
+    """
     clear_screen()
     # Instructions in bold blue
     print(f"\n{BOLD}{BLUE}Select files to merge (Use ↑↓ to navigate, Space to select/deselect, Enter to confirm):{RESET}\n")
     for i, file in enumerate(files):
-        # Green for selected [x], Red for [ ]
-        checkbox = f"{GREEN}[x]{RESET}" if file in selected_files else f"{RED}[ ]{RESET}"
+        # Determine checkbox state and color
+        if file in merged_files:
+            # Already merged files - show as [*] in MAGENTA
+            checkbox = f"{MAGENTA}[*]{RESET}"
+            file_color = MAGENTA
+        else:
+            # Regular files
+            checkbox = f"{GREEN}[x]{RESET}" if file in selected_files else f"{RED}[ ]{RESET}"
+            file_color = WHITE
+        
+        line_str = f"{checkbox} {file_color}{file}{RESET}"
+
         if i == current_index:
             # Highlight the current line with a blue background
-            print(f"{BG_BLUE}{checkbox} {file}{RESET}")
+            print(f"{BG_BLUE}{line_str}{RESET}")
         else:
-            print(f"{checkbox} {file}")
+            print(line_str)
     
     # Show the count of selected files in bold yellow
-    print(f"\n{BOLD}{YELLOW}Selected files:{RESET}", len(selected_files))
+    print(f"\n{BOLD}{YELLOW}Selected files:{RESET}", len([f for f in selected_files if f not in merged_files]))
     # Instructions for other keys
-    print(f"\nPress '{RED}q{RESET}' to quit, '{GREEN}a{RESET}' to select all, '{RED}d{RESET}' to deselect all")
+    print(f"\nPress '{RED}q{RESET}' to quit, '{GREEN}a{RESET}' to select all non-merged, '{RED}d{RESET}' to deselect all")
 
-def interactive_file_selection(files):
+def interactive_file_selection(files, merged_files):
     """
-    Provide an interactive file selection interface with checkboxes
-    Returns a list of selected files
+    Provide an interactive file selection interface with checkboxes.
+    Already merged files are shown differently and cannot be re-selected.
+    Returns a list of selected files.
     """
     selected_files = set()
     current_index = 0
     
     while True:
-        print_file_list(files, selected_files, current_index)
+        print_file_list(files, selected_files, merged_files, current_index)
         
         try:
             key = msvcrt.getch()  # Get keypress without Enter
@@ -101,17 +114,23 @@ def interactive_file_selection(files):
                     current_index = (current_index + 1) % len(files)
             elif key == b' ':  # Space
                 current_file = files[current_index]
-                if current_file in selected_files:
-                    selected_files.remove(current_file)
+                if current_file in merged_files:
+                    # Already merged, do not toggle
+                    pass
                 else:
-                    selected_files.add(current_file)
+                    if current_file in selected_files:
+                        selected_files.remove(current_file)
+                    else:
+                        selected_files.add(current_file)
             elif key == b'\r':  # Enter
-                if selected_files:
-                    return list(selected_files)
+                # Return only non-merged selected files
+                final_selection = [f for f in selected_files if f not in merged_files]
+                if final_selection:
+                    return final_selection
             elif key == b'q':  # Quit
                 return None
-            elif key == b'a':  # Select all
-                selected_files = set(files)
+            elif key == b'a':  # Select all non-merged
+                selected_files = set(f for f in files if f not in merged_files)
             elif key == b'd':  # Deselect all
                 selected_files.clear()
                 
@@ -154,12 +173,8 @@ def select_files_to_merge():
                 date_choice = int(choice)
                 if 1 <= date_choice <= len(dates):
                     selected_date = dates[date_choice - 1]
-                    # Get files for selected date and use interactive selection
-                    files = sorted(grouped_files[selected_date], key=parse_time_from_filename)
-                    selected_files = interactive_file_selection(files)
-                    if selected_files is None or not selected_files:
-                        return None
-                    return selected_date, selected_files
+                    # Return the date, and we'll handle interactive selection outside
+                    return selected_date, None
                 
             print("Invalid selection. Please try again.")
         except ValueError:
@@ -203,6 +218,8 @@ def process_files(date, files):
     final_clip.write_audiofile(os.path.join(directory, output_filename))
     print(f"{BOLD}{CYAN}Merge complete! Output saved as: {output_filename}{RESET}")
 
+    return True
+
 # Group files by date
 grouped_files = defaultdict(list)
 for mp3_file in mp3_files:
@@ -225,9 +242,41 @@ def main():
             break
             
         date, files = selection
-        process_files(date, files)
-        
-        if input("\nWould you like to merge more files? (y/n): ").lower() != 'y':
+        if files is not None:
+            # "Merge all" choice was selected
+            success = process_files(date, files)
+            if input("\nWould you like to merge more files? (y/n): ").lower() != 'y':
+                break
+        else:
+            # Interactive selection on this date
+            day_files = sorted(grouped_files[date], key=parse_time_from_filename)
+            merged_files = set()  # keep track of all merged files for this date
+
+            while True:
+                selected_files = interactive_file_selection(day_files, merged_files)
+                if not selected_files:
+                    # No selection, user might have quit or pressed Enter with no selection
+                    # Ask if user wants to exit this date
+                    proceed = input("\nNo files selected. Return to main menu? (y/n): ").lower()
+                    if proceed == 'y':
+                        break
+                    else:
+                        # Continue selecting
+                        continue
+                
+                success = process_files(date, selected_files)
+                if success:
+                    # Mark selected files as merged
+                    merged_files.update(selected_files)
+
+                # Ask if user wants to merge more files from the same day
+                more = input("\nWould you like to merge more files from the same day? (y/n): ").lower()
+                if more != 'y':
+                    # Exit to main menu
+                    break
+
+        # After finishing with this date
+        if input("\nWould you like to merge files from another date? (y/n): ").lower() != 'y':
             break
 
     print(f"\n{BOLD}{GREEN}Thank you for using MP3 File Merger!{RESET}")
