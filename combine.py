@@ -1,15 +1,19 @@
-from moviepy.editor import concatenate_audioclips, AudioFileClip
 import os
+import sys
+import re
+import json
+import logging
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
-import re
-import msvcrt  # For Windows
-import sys
+from tqdm import tqdm
 
-directory = os.getcwd()  # Current directory
+# Only works well on Windows for arrow keys; remove or adapt if on another platform.
+import msvcrt
 
-# ANSI Escape Code Definitions
+from moviepy.editor import concatenate_audioclips, AudioFileClip
+
+# ANSI Escape Code Definitions for Coloring
 RESET = "\033[0m"
 BOLD = "\033[1m"
 UNDERLINE = "\033[4m"
@@ -22,40 +26,64 @@ CYAN = "\033[36m"
 WHITE = "\033[37m"
 BG_BLUE = "\033[44m"
 
+# Set up logging
+logging.basicConfig(level=logging.INFO, format='%(asctime)s [%(levelname)s] %(message)s', datefmt='%H:%M:%S')
+
+# Load configuration if available
+def load_config():
+    config_path = os.path.join(os.getcwd(), "config.json")
+    if os.path.isfile(config_path):
+        try:
+            with open(config_path, "r") as f:
+                return json.load(f)
+        except Exception as e:
+            logging.warning("Failed to load config.json: %s", e)
+    return {}
+
+config = load_config()
+
+# Configuration Defaults
+DATE_TIME_REGEX = config.get("date_time_regex", r'(\d{4}-\d{2}-\d{2}) (\d{2}-\d{2}(-\d{2})?)')
+DEFAULT_DATE_FORMAT = config.get("default_date_format", "%Y-%m-%d")
+DEFAULT_TIME_FORMAT = config.get("default_time_format", "%H-%M-%S")
+OUTPUT_DIR = config.get("default_output_dir", None)  # None means current directory
+
+directory = os.getcwd()  # Current directory
+if OUTPUT_DIR and not os.path.exists(OUTPUT_DIR):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+# Compile the date time pattern
+date_time_pattern = re.compile(DATE_TIME_REGEX)
+
 # List comprehension to get all mp3 files
 mp3_files = [f for f in os.listdir(directory) if f.endswith('.mp3')]
 
-def parse_time_from_filename(filename):
-    date_time_pattern = re.compile(r'(\d{4}-\d{2}-\d{2}) (\d{2}-\d{2}(-\d{2})?)')
-    match = date_time_pattern.search(filename)
-    if match:
-        date_str, time_str = match.groups()[:2]
-        date = datetime.strptime(date_str, "%Y-%m-%d").date()
-        try:
-            # Try to parse time with seconds
-            time = datetime.strptime(time_str, "%H-%M-%S").time()
-        except ValueError:
-            # If it fails, parse time without seconds
-            time = datetime.strptime(time_str, "%H-%M").time()
-        return datetime.combine(date, time)
-    else:
-        return None
-
 def parse_date_and_time_from_filename(filename):
-    date_time_pattern = re.compile(r'(\d{4}-\d{2}-\d{2}) (\d{2}-\d{2}(-\d{2})?)')
     match = date_time_pattern.search(filename)
     if match:
         date_str, time_str = match.groups()[:2]
-        date = datetime.strptime(date_str, "%Y-%m-%d").date()
         try:
-            # Try to parse time with seconds
-            time = datetime.strptime(time_str, "%H-%M-%S").time()
+            date = datetime.strptime(date_str, DEFAULT_DATE_FORMAT).date()
         except ValueError:
-            # If it fails, parse time without seconds
-            time = datetime.strptime(time_str, "%H-%M").time()
+            return None, None
+        # Try parsing time with seconds first
+        try:
+            time = datetime.strptime(time_str, DEFAULT_TIME_FORMAT).time()
+        except ValueError:
+            # If it fails, parse time without seconds (HH-MM)
+            try:
+                time = datetime.strptime(time_str, "%H-%M").time()
+            except ValueError:
+                return None, None
         return date, time
     else:
         return None, None
+
+def parse_time_from_filename(filename):
+    date, time = parse_date_and_time_from_filename(filename)
+    if date and time:
+        return datetime.combine(date, time)
+    return datetime.min  # fallback to a minimal datetime if parsing fails
 
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -135,16 +163,17 @@ def interactive_file_selection(files, merged_files):
                 selected_files.clear()
                 
         except Exception as e:
-            print(f"Error: {e}")
+            logging.error(f"Error during selection: {e}")
             return None
 
-def select_files_to_merge():
+def select_files_to_merge(grouped_files):
     if not grouped_files:
-        print("No MP3 files found with the expected date-time format.")
+        logging.info("No MP3 files found with the expected date-time format.")
         return None
 
     # Display available dates
     dates = sorted(grouped_files.keys())
+    clear_screen()
     print("\nAvailable dates:")
     for i, date in enumerate(dates, 1):
         print(f"{i}. {date.strftime('%Y-%m-%d')} ({len(grouped_files[date])} files)")
@@ -180,25 +209,37 @@ def select_files_to_merge():
         except ValueError:
             print("Please enter a valid number or number+a (e.g., '1' or '1a').")
 
-def process_files(date, files):
+def load_audio_clip(file_path):
+    try:
+        clip = AudioFileClip(file_path)
+        return clip
+    except Exception as e:
+        logging.error("Error loading clip %s: %s", file_path, e)
+        return None
+
+def process_files(date, files, output_dir):
     # Sort the list based on time in the filename
     files.sort(key=lambda x: parse_time_from_filename(x))
+    file_paths = [os.path.join(directory, f) for f in files]
 
-    print(f"\nProcessing files for {date.strftime('%Y-%m-%d')}:")
-    for file in files:
-        print(f"- {file}")
-
+    # Parallel loading with progress
     audio_clips = []
-    for mp3_file in files:
-        audio_clip = AudioFileClip(os.path.join(directory, mp3_file))
-        if audio_clip.duration > 0:
-            audio_clips.append(audio_clip)
-        else:
-            print(f"Skipping zero-duration clip: {mp3_file}")
+    with ThreadPoolExecutor() as executor:
+        # Map with progress bar
+        futures = list(tqdm(executor.map(load_audio_clip, file_paths), total=len(file_paths), desc="Loading Clips"))
+        for clip in futures:
+            if clip and clip.duration > 0:
+                audio_clips.append(clip)
 
     if not audio_clips:
-        print(f"No valid audio clips found for {date}")
-        return
+        logging.warning(f"No valid audio clips found for {date}")
+        return False
+
+    # Calculate total duration
+    total_duration = sum(clip.duration for clip in audio_clips if clip)
+    minutes = int(total_duration // 60)
+    seconds = int(total_duration % 60)
+    logging.info(f"Total merged duration: {minutes} minutes and {seconds} seconds.")
 
     # Get the first audio clip filename
     first_clip_filename = files[0]
@@ -207,44 +248,57 @@ def process_files(date, files):
     first_clip_date, first_clip_time = parse_date_and_time_from_filename(first_clip_filename)
 
     if first_clip_date is None or first_clip_time is None:
-        print(f"Could not parse date and time from filename: {first_clip_filename}")
-        return
+        logging.error(f"Could not parse date and time from filename: {first_clip_filename}")
+        return False
 
     # Format the date and time for the output filename
     output_filename = f"{first_clip_date.strftime('%Y%m%d')} {first_clip_time.strftime('%H-%M')}.mp3"
 
-    print(f"\n{BOLD}{GREEN}Merging files into: {output_filename}{RESET}")
-    final_clip = concatenate_audioclips(audio_clips)
-    final_clip.write_audiofile(os.path.join(directory, output_filename))
-    print(f"{BOLD}{CYAN}Merge complete! Output saved as: {output_filename}{RESET}")
+    if output_dir:
+        output_path = os.path.join(output_dir, output_filename)
+    else:
+        output_path = os.path.join(directory, output_filename)
 
-    return True
+    logging.info(f"Merging files into: {output_filename}")
+
+    try:
+        final_clip = concatenate_audioclips(audio_clips)
+        final_clip.write_audiofile(output_path)
+        # Close all clips
+        for c in audio_clips:
+            c.close()
+        final_clip.close()
+        logging.info(f"Merge complete! Output saved as: {output_path}")
+        return True
+    except Exception as e:
+        logging.error("Error during merging: %s", e)
+        return False
 
 # Group files by date
 grouped_files = defaultdict(list)
 for mp3_file in mp3_files:
-    # Extract date and time from filename
     date, _ = parse_date_and_time_from_filename(mp3_file)
     if date is not None:
         grouped_files[date].append(mp3_file)
 
 def main():
+    logging.info("MP3 File Merger Started")
     print(f"{BOLD}{YELLOW}MP3 File Merger{RESET}")
-    print(f"{'=' * 15}")
-    
+    print("=" * 15)
+
     if not mp3_files:
-        print("No MP3 files found in the current directory.")
+        logging.info("No MP3 files found in the current directory.")
         return
 
     while True:
-        selection = select_files_to_merge()
+        selection = select_files_to_merge(grouped_files)
         if selection is None:
             break
             
         date, files = selection
         if files is not None:
             # "Merge all" choice was selected
-            success = process_files(date, files)
+            success = process_files(date, files, OUTPUT_DIR)
             if input("\nWould you like to merge more files? (y/n): ").lower() != 'y':
                 break
         else:
@@ -255,16 +309,14 @@ def main():
             while True:
                 selected_files = interactive_file_selection(day_files, merged_files)
                 if not selected_files:
-                    # No selection, user might have quit or pressed Enter with no selection
-                    # Ask if user wants to exit this date
+                    # No selection, ask user if they want to return to main menu
                     proceed = input("\nNo files selected. Return to main menu? (y/n): ").lower()
                     if proceed == 'y':
                         break
                     else:
-                        # Continue selecting
                         continue
                 
-                success = process_files(date, selected_files)
+                success = process_files(date, selected_files, OUTPUT_DIR)
                 if success:
                     # Mark selected files as merged
                     merged_files.update(selected_files)
@@ -279,7 +331,15 @@ def main():
         if input("\nWould you like to merge files from another date? (y/n): ").lower() != 'y':
             break
 
+    logging.info("Thank you for using MP3 File Merger!")
     print(f"\n{BOLD}{GREEN}Thank you for using MP3 File Merger!{RESET}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except KeyboardInterrupt:
+        logging.info("Interrupted by user. Exiting...")
+        sys.exit(0)
+    except Exception as e:
+        logging.error("An unexpected error occurred: %s", e)
+        sys.exit(1)
