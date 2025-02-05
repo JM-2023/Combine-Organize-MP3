@@ -3,6 +3,7 @@ import sys
 import re
 import json
 import logging
+import subprocess
 from datetime import datetime
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
@@ -170,6 +171,54 @@ def convert_mp4_to_mp3(video_file):
     clip.close()
 
 # ----------------------------
+# New Feature: Remove Silence from Audio using ffmpeg.exe
+# ----------------------------
+
+class RemoveSilenceWorker(QtCore.QObject):
+    """
+    Worker object to remove silent parts from selected audio files using ffmpeg.exe.
+    Silence is defined as below -50dB and segments longer than 40ms.
+    For each input file, a new file with '_nosilence' appended to its name is created.
+    """
+    finished = QtCore.pyqtSignal(bool, int)  # success flag, count of processed files
+    progress = QtCore.pyqtSignal(str)
+    
+    def __init__(self, files, parent=None):
+        super().__init__(parent)
+        self.files = files
+        
+    @QtCore.pyqtSlot()
+    def run(self):
+        self.progress.emit("Removing silence from selected files...")
+        ffmpeg_path = os.path.join(directory, "ffmpeg.exe")
+        if not os.path.isfile(ffmpeg_path):
+            logging.error("ffmpeg.exe not found in the current directory.")
+            self.finished.emit(False, 0)
+            return
+        count = 0
+        for file in self.files:
+            input_file = os.path.join(directory, file)
+            base, ext = os.path.splitext(file)
+            output_file = os.path.join(directory, f"{base}_nosilence{ext}")
+            # Use the silenceremove filter:
+            # stop_periods=-1 : removes all silence segments throughout the file.
+            # stop_duration=0.04 : silence segments must be longer than 40ms.
+            # stop_threshold=-50dB : silence is considered below -50dB.
+            command = [
+                ffmpeg_path,
+                "-y",  # overwrite output file if it exists
+                "-i", input_file,
+                "-af", "silenceremove=stop_periods=-1:stop_duration=0.04:stop_threshold=-50dB",
+                output_file
+            ]
+            try:
+                subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                count += 1
+            except Exception as e:
+                logging.error("Error removing silence from file %s: %s", file, e)
+        self.finished.emit(True, count)
+
+# ----------------------------
 # PyQt5 Worker Classes
 # ----------------------------
 
@@ -267,6 +316,11 @@ class MainWindow(QtWidgets.QMainWindow):
         self.convertButton = QtWidgets.QPushButton("Convert MP4 to MP3")
         self.convertButton.clicked.connect(self.convertMp4Files)
         buttonLayout.addWidget(self.convertButton)
+        
+        # New button to remove silence from selected audio files
+        self.removeSilenceButton = QtWidgets.QPushButton("Remove Silence")
+        self.removeSilenceButton.clicked.connect(self.removeSilenceSelectedFiles)
+        buttonLayout.addWidget(self.removeSilenceButton)
         
         layout.addLayout(buttonLayout)
         
@@ -379,6 +433,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mergeAllButton.setEnabled(False)
         self.refreshButton.setEnabled(False)
         self.convertButton.setEnabled(False)
+        self.removeSilenceButton.setEnabled(False)
         
         self.thread = QtCore.QThread()
         self.worker = MergeWorker(files, OUTPUT_DIR)
@@ -400,6 +455,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mergeAllButton.setEnabled(True)
         self.refreshButton.setEnabled(True)
         self.convertButton.setEnabled(True)
+        self.removeSilenceButton.setEnabled(True)
         if success:
             QtWidgets.QMessageBox.information(self, "Merge Complete",
                                               f"Merge completed successfully!\nOutput: {output_path}")
@@ -419,6 +475,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mergeAllButton.setEnabled(False)
         self.refreshButton.setEnabled(False)
         self.convertButton.setEnabled(False)
+        self.removeSilenceButton.setEnabled(False)
         
         self.convertThread = QtCore.QThread()
         self.convertWorker = ConvertWorker()
@@ -440,6 +497,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.mergeAllButton.setEnabled(True)
         self.refreshButton.setEnabled(True)
         self.convertButton.setEnabled(True)
+        self.removeSilenceButton.setEnabled(True)
         if success:
             QtWidgets.QMessageBox.information(self, "Conversion Complete",
                                               f"Successfully converted {count} MP4 files to MP3.")
@@ -448,67 +506,169 @@ class MainWindow(QtWidgets.QMainWindow):
                                           "No MP4 files found or an error occurred during conversion.")
         # After conversion, refresh the file list (in case new MP3s were created)
         self.refreshFileList()
+    
+    def removeSilenceSelectedFiles(self):
+        """
+        Remove silent parts from the selected MP3 files using ffmpeg.exe.
+        """
+        selected = self.getSelectedFiles()
+        if not selected:
+            QtWidgets.QMessageBox.warning(self, "No Selection", "Please select at least one audio file to process.")
+            return
+        
+        # Flatten the dictionary into a list of file names.
+        all_files = []
+        for file_list in selected.values():
+            all_files.extend(file_list)
+        
+        self.progressBar.setVisible(True)
+        self.progressBar.setRange(0, 0)  # indefinite (busy) indicator
+        self.mergeButton.setEnabled(False)
+        self.mergeAllButton.setEnabled(False)
+        self.refreshButton.setEnabled(False)
+        self.convertButton.setEnabled(False)
+        self.removeSilenceButton.setEnabled(False)
+        
+        self.silenceThread = QtCore.QThread()
+        self.silenceWorker = RemoveSilenceWorker(all_files)
+        self.silenceWorker.moveToThread(self.silenceThread)
+        self.silenceThread.started.connect(self.silenceWorker.run)
+        self.silenceWorker.finished.connect(self.onRemoveSilenceFinished)
+        self.silenceWorker.finished.connect(self.silenceThread.quit)
+        self.silenceWorker.finished.connect(self.silenceWorker.deleteLater)
+        self.silenceThread.finished.connect(self.silenceThread.deleteLater)
+        self.silenceThread.start()
+        
+    def onRemoveSilenceFinished(self, success, count):
+        """
+        Called when the remove silence worker finishes.
+        Updates the UI and notifies the user.
+        """
+        self.progressBar.setVisible(False)
+        self.mergeButton.setEnabled(True)
+        self.mergeAllButton.setEnabled(True)
+        self.refreshButton.setEnabled(True)
+        self.convertButton.setEnabled(True)
+        self.removeSilenceButton.setEnabled(True)
+        if success:
+            QtWidgets.QMessageBox.information(self, "Silence Removal Complete",
+                                              f"Removed silence from {count} file(s).")
+        else:
+            QtWidgets.QMessageBox.warning(self, "Silence Removal",
+                                          "An error occurred during silence removal.")
+        # Refresh the file list in case new MP3 files were created.
+        self.refreshFileList()
 
 if __name__ == "__main__":
+    import platform
     app = QtWidgets.QApplication(sys.argv)
     
-    # Apply a futuristic QSS style with a lighter background.
-    # The background is now a subtle light gray (#f7f8fa) with white panels,
-    # dark text (#333333) for readability, and accent colors from the Fastmail palette.
-    style = """
-    /* Base style for all widgets with a light background */
-    QWidget {
-        background-color: #f7f8fa;
-        color: #333333;
-        font-family: 'Roboto', sans-serif;
-        font-size: 14px;
-    }
-    QMainWindow {
-        background-color: #f7f8fa;
-    }
-    QLabel {
-        color: #333333;
-    }
-    /* QPushButton styling with gradient using Fastmail-inspired blues */
-    QPushButton {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0067b9, stop:1 #69b3e7);
-        border: none;
-        padding: 10px 20px;
-        border-radius: 5px;
-        color: #ffffff;
-    }
-    QPushButton:hover {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0088d4, stop:1 #69b3e7);
-    }
-    QPushButton:pressed {
-        background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #005a99, stop:1 #69b3e7);
-    }
-    /* QTreeWidget styling with a light background and yellow selection accent */
-    QTreeWidget {
-        background-color: #ffffff;
-        border: 1px solid #cccccc;
-        border-radius: 5px;
-    }
-    QTreeWidget::item {
-        padding: 5px;
-    }
-    QTreeWidget::item:selected {
-        background-color: #ffc107;
-        color: #333333;
-    }
-    /* QProgressBar styling */
-    QProgressBar {
-        border: 1px solid #cccccc;
-        border-radius: 5px;
-        text-align: center;
-        background-color: #ffffff;
-    }
-    QProgressBar::chunk {
-        background-color: #0067b9;
-        border-radius: 5px;
-    }
-    """
-    app.setStyleSheet(style)
+    # Adjust appearance based on platform
+    if platform.system() == "Darwin":
+        # Use the macOS native style if available
+        app.setStyle("macintosh")
+        mac_style = """
+        /* macOS-like appearance */
+        QWidget {
+            background-color: #FFFFFF;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+            font-size: 14px;
+        }
+        QMainWindow {
+            background-color: #FFFFFF;
+        }
+        QLabel {
+            color: #333333;
+        }
+        QPushButton {
+            background-color: #E0E0E0;
+            border: 1px solid #B0B0B0;
+            border-radius: 4px;
+            padding: 6px 12px;
+        }
+        QPushButton:hover {
+            background-color: #D0D0D0;
+        }
+        QPushButton:pressed {
+            background-color: #C0C0C0;
+        }
+        QTreeWidget {
+            background-color: #FFFFFF;
+            border: 1px solid #C0C0C0;
+            border-radius: 4px;
+        }
+        QTreeWidget::item {
+            padding: 5px;
+        }
+        QTreeWidget::item:selected {
+            background-color: #007AFF;
+            color: #FFFFFF;
+        }
+        QProgressBar {
+            border: 1px solid #C0C0C0;
+            border-radius: 4px;
+            text-align: center;
+            background-color: #FFFFFF;
+        }
+        QProgressBar::chunk {
+            background-color: #007AFF;
+            border-radius: 4px;
+        }
+        """
+        app.setStyleSheet(mac_style)
+    else:
+        # Retain the original futuristic style on non-macOS platforms.
+        style = """
+        /* Futuristic style for non-macOS platforms */
+        QWidget {
+            background-color: #f7f8fa;
+            color: #333333;
+            font-family: 'Roboto', sans-serif;
+            font-size: 14px;
+        }
+        QMainWindow {
+            background-color: #f7f8fa;
+        }
+        QLabel {
+            color: #333333;
+        }
+        QPushButton {
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0067b9, stop:1 #69b3e7);
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            color: #ffffff;
+        }
+        QPushButton:hover {
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #0088d4, stop:1 #69b3e7);
+        }
+        QPushButton:pressed {
+            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #005a99, stop:1 #69b3e7);
+        }
+        QTreeWidget {
+            background-color: #ffffff;
+            border: 1px solid #cccccc;
+            border-radius: 5px;
+        }
+        QTreeWidget::item {
+            padding: 5px;
+        }
+        QTreeWidget::item:selected {
+            background-color: #ffc107;
+            color: #333333;
+        }
+        QProgressBar {
+            border: 1px solid #cccccc;
+            border-radius: 5px;
+            text-align: center;
+            background-color: #ffffff;
+        }
+        QProgressBar::chunk {
+            background-color: #0067b9;
+            border-radius: 5px;
+        }
+        """
+        app.setStyleSheet(style)
     
     window = MainWindow()
     window.show()
