@@ -4,9 +4,10 @@ import re
 import json
 import logging
 import subprocess
+import shutil
 from datetime import datetime
 from collections import defaultdict
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 
 # moviepy imports
@@ -43,6 +44,9 @@ DATE_TIME_REGEX = config.get("date_time_regex", r'(\d{4}-\d{2}-\d{2}) (\d{2}-\d{
 DEFAULT_DATE_FORMAT = config.get("default_date_format", "%Y-%m-%d")
 DEFAULT_TIME_FORMAT = config.get("default_time_format", "%H-%M-%S")
 OUTPUT_DIR = config.get("default_output_dir", None)  # if None, use current directory
+PATH_TO_7ZIP = config.get("path_to_7zip", "C:\\Program Files\\7-Zip\\7z.exe")  # Default path to 7-Zip
+# Set the max number of parallel tasks based on CPU cores
+MAX_WORKERS = config.get("max_workers", min(32, os.cpu_count() * 2 + 4))  # Default to CPU cores * 2 + 4, max 32
 
 directory = os.getcwd()
 if OUTPUT_DIR and not os.path.exists(OUTPUT_DIR):
@@ -93,22 +97,39 @@ def parse_time_from_filename(filename):
 # Merging Function for MP3 Files (supports multiple days)
 # ----------------------------
 
-def process_files(files, output_dir):
+def process_files(files, output_dir, progress_callback=None):
     """
     Given a list of MP3 file names (which may come from different days), load, concatenate,
     and write the merged MP3 file. Returns (success_flag, output_file_path).
+    
+    Parameters:
+        files (list): List of MP3 file names to process
+        output_dir (str): Directory to save the output file
+        progress_callback (function): Optional callback function to report progress
     """
     # Sort files by the parsed datetime
     files.sort(key=lambda x: parse_time_from_filename(x))
     file_paths = [os.path.join(directory, f) for f in files]
+    
+    if progress_callback:
+        progress_callback(f"Loading {len(files)} audio files...")
 
     # Load audio clips in parallel
     audio_clips = []
-    with ThreadPoolExecutor() as executor:
-        futures = list(executor.map(load_audio_clip, file_paths))
-        for clip in futures:
-            if clip and clip.duration > 0:
-                audio_clips.append(clip)
+    with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+        # Create a map of future to filename for better error reporting
+        future_to_file = {executor.submit(load_audio_clip, file_path): file_path for file_path in file_paths}
+        
+        for i, future in enumerate(as_completed(future_to_file)):
+            file_path = future_to_file[future]
+            if progress_callback and i % 5 == 0:  # Update progress every 5 files
+                progress_callback(f"Loaded {i}/{len(files)} audio files...")
+            try:
+                clip = future.result()
+                if clip and clip.duration > 0:
+                    audio_clips.append(clip)
+            except Exception as e:
+                logging.error(f"Error processing {file_path}: {e}")
 
     if not audio_clips:
         logging.warning("No valid audio clips found in the selection.")
@@ -118,6 +139,9 @@ def process_files(files, output_dir):
     minutes = int(total_duration // 60)
     seconds = int(total_duration % 60)
     logging.info(f"Merging {len(files)} files with total duration: {minutes} minutes and {seconds} seconds.")
+    
+    if progress_callback:
+        progress_callback(f"Merging {len(audio_clips)} audio clips ({minutes}m {seconds}s total)...")
 
     # Use the first and last file for naming.
     first_clip_filename = files[0]
@@ -143,6 +167,8 @@ def process_files(files, output_dir):
     logging.info(f"Merging files into: {output_filename}")
     try:
         final_clip = concatenate_audioclips(audio_clips)
+        if progress_callback:
+            progress_callback(f"Writing final audio file to {output_filename}...")
         final_clip.write_audiofile(output_path)
         # Close all clips
         for c in audio_clips:
@@ -158,17 +184,221 @@ def process_files(files, output_dir):
 # Conversion Function: Convert MP4 to MP3
 # ----------------------------
 
-def convert_mp4_to_mp3(video_file):
+def convert_mp4_to_mp3(args):
     """
     Convert a single MP4 file to an MP3 file.
     The output file will have the same base name with a .mp3 extension.
+    
+    Parameters:
+        args (tuple): (video_file, progress_callback, index, total)
     """
-    audio_file = os.path.splitext(video_file)[0] + '.mp3'
-    video_path = os.path.join(directory, video_file)
-    clip = AudioFileClip(video_path)
-    output_path = os.path.join(directory, audio_file)
-    clip.write_audiofile(output_path, codec='mp3')
-    clip.close()
+    video_file, progress_callback, index, total = args
+    try:
+        audio_file = os.path.splitext(video_file)[0] + '.mp3'
+        video_path = os.path.join(directory, video_file)
+        clip = AudioFileClip(video_path)
+        output_path = os.path.join(directory, audio_file)
+        clip.write_audiofile(output_path, codec='mp3', logger=None)  # Disable moviepy logging
+        clip.close()
+        if progress_callback:
+            progress_callback(f"Converted {index+1}/{total}: {video_file}")
+        return True, video_file
+    except Exception as e:
+        logging.error(f"Error converting {video_file}: {e}")
+        return False, video_file
+
+# ----------------------------
+# Function to process a file for silence removal
+# ----------------------------
+
+def remove_silence_from_file(args):
+    """
+    Remove silence from a single audio file using ffmpeg.
+    
+    Parameters:
+        args (tuple): (file, ffmpeg_path, progress_callback, index, total)
+    """
+    file, ffmpeg_path, progress_callback, index, total = args
+    
+    try:
+        input_file = os.path.join(directory, file)
+        base, ext = os.path.splitext(file)
+        output_file = os.path.join(directory, f"{base}_nosilence{ext}")
+        
+        # Use the silenceremove filter
+        command = [
+            ffmpeg_path,
+            "-y",  # overwrite output file if it exists
+            "-i", input_file,
+            "-af", "silenceremove=stop_periods=-1:stop_duration=0.1:stop_threshold=-50dB",
+            output_file
+        ]
+        
+        # Run ffmpeg command
+        subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        
+        if progress_callback:
+            progress_callback(f"Processed {index+1}/{total}: {file}")
+        
+        return True, file
+    except Exception as e:
+        logging.error(f"Error removing silence from {file}: {e}")
+        return False, file
+
+# ----------------------------
+# Function to process a date group for organization
+# ----------------------------
+
+def process_date_group(args):
+    """
+    Process a single date group for organization.
+    Creates a folder and moves files into it.
+    
+    Parameters:
+        args (tuple): (date, files, working_directory, progress_callback, index, total_dates)
+    
+    Returns:
+        tuple: (date, folder_path, success)
+    """
+    date, files, working_directory, progress_callback, index, total_dates = args
+    
+    try:
+        files.sort()  # Sort files by time
+        folder_name = f"{date} {files[0][0]}"
+        folder_path = os.path.join(working_directory, folder_name)
+        
+        if not os.path.exists(folder_path):
+            os.makedirs(folder_path)
+        
+        for _, file in files:
+            source_path = os.path.join(working_directory, file)
+            dest_path = os.path.join(folder_path, file)
+            try:
+                shutil.move(source_path, dest_path)
+            except Exception as e:
+                logging.error(f"Error moving file {file}: {e}")
+        
+        if progress_callback:
+            progress_callback(f"Organized folder {index+1}/{total_dates}: {folder_name}")
+        
+        return date, folder_path, True
+    except Exception as e:
+        logging.error(f"Error processing date group {date}: {e}")
+        return date, None, False
+
+# ----------------------------
+# Function to create a ZIP archive
+# ----------------------------
+
+def create_zip_archive(args):
+    """
+    Create a ZIP archive for a folder.
+    
+    Parameters:
+        args (tuple): (folder_name, folder_path, path_to_7zip, working_directory, progress_callback, index, total)
+    
+    Returns:
+        tuple: (folder_name, success)
+    """
+    folder_name, folder_path, path_to_7zip, working_directory, progress_callback, index, total = args
+    
+    try:
+        zip_name = f"{folder_name}.zip"
+        zip_path = os.path.join(working_directory, zip_name)
+        
+        # Build the 7-Zip command
+        zip_command = [
+            path_to_7zip,
+            "a",        # add to archive
+            zip_path,   # archive name
+            folder_path # folder to compress
+        ]
+        
+        # Run the 7-Zip command
+        result = subprocess.run(
+            zip_command, 
+            stdout=subprocess.PIPE, 
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        
+        success = result.returncode == 0
+        
+        if progress_callback:
+            if success:
+                progress_callback(f"Created ZIP {index+1}/{total}: {zip_name}")
+            else:
+                progress_callback(f"Failed to create ZIP {index+1}/{total}: {zip_name}")
+        
+        return folder_name, success
+    except Exception as e:
+        logging.error(f"Error creating ZIP for {folder_name}: {e}")
+        return folder_name, False
+
+# ----------------------------
+# PyQt5 Worker Classes
+# ----------------------------
+
+class MergeWorker(QtCore.QObject):
+    """
+    Worker object to run the merge process in a separate thread.
+    Emits a finished signal when done.
+    """
+    finished = QtCore.pyqtSignal(bool, str, list)  # success, output_path, merged_files
+    progress = QtCore.pyqtSignal(str)
+    
+    def __init__(self, files, output_dir, parent=None):
+        super().__init__(parent)
+        self.files = files
+        self.output_dir = output_dir
+        
+    @QtCore.pyqtSlot()
+    def run(self):
+        self.progress.emit("Merging files...")
+        success, output_path = process_files(self.files, self.output_dir, self.progress.emit)
+        self.finished.emit(success, output_path if output_path else "", self.files)
+
+class ConvertWorker(QtCore.QObject):
+    """
+    Worker object to run MP4 to MP3 conversion in a separate thread.
+    Emits a finished signal when done.
+    """
+    finished = QtCore.pyqtSignal(bool, int)  # success, count of files converted
+    progress = QtCore.pyqtSignal(str)
+    
+    @QtCore.pyqtSlot()
+    def run(self):
+        self.progress.emit("Converting MP4 files to MP3...")
+        mp4_files = [f for f in os.listdir(directory) if f.lower().endswith('.mp4')]
+        count = 0
+        successful = 0
+        
+        if not mp4_files:
+            self.finished.emit(False, count)
+            return
+        
+        try:
+            total = len(mp4_files)
+            self.progress.emit(f"Found {total} MP4 files to convert")
+            
+            # Create arguments for parallel processing
+            args_list = [(file, self.progress.emit, i, total) for i, file in enumerate(mp4_files)]
+            
+            # Process files in parallel
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_file = {executor.submit(convert_mp4_to_mp3, args): args[0] for args in args_list}
+                
+                for future in as_completed(future_to_file):
+                    success, file = future.result()
+                    count += 1
+                    if success:
+                        successful += 1
+            
+            self.progress.emit(f"Conversion complete. Successfully converted {successful}/{count} files.")
+            self.finished.emit(True, successful)
+        except Exception as e:
+            logging.error(f"Error during MP4 to MP3 conversion: {e}")
+            self.finished.emit(False, count)
 
 # ----------------------------
 # New Feature: Remove Silence from Audio using ffmpeg.exe
@@ -195,76 +425,124 @@ class RemoveSilenceWorker(QtCore.QObject):
             logging.error("ffmpeg.exe not found in the current directory.")
             self.finished.emit(False, 0)
             return
-        count = 0
-        for file in self.files:
-            input_file = os.path.join(directory, file)
-            base, ext = os.path.splitext(file)
-            output_file = os.path.join(directory, f"{base}_nosilence{ext}")
-            # Use the silenceremove filter:
-            # stop_periods=-1 : removes all silence segments throughout the file.
-            # stop_duration=0.04 : silence segments must be longer than 40ms.
-            # stop_threshold=-50dB : silence is considered below -50dB.
-            command = [
-                ffmpeg_path,
-                "-y",  # overwrite output file if it exists
-                "-i", input_file,
-                "-af", "silenceremove=stop_periods=-1:stop_duration=0.04:stop_threshold=-50dB",
-                output_file
-            ]
-            try:
-                subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-                count += 1
-            except Exception as e:
-                logging.error("Error removing silence from file %s: %s", file, e)
-        self.finished.emit(True, count)
+        
+        try:
+            total = len(self.files)
+            self.progress.emit(f"Processing {total} files to remove silence")
+            
+            # Create arguments for parallel processing
+            args_list = [(file, ffmpeg_path, self.progress.emit, i, total) for i, file in enumerate(self.files)]
+            
+            # Process files in parallel
+            successful = 0
+            with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
+                future_to_file = {executor.submit(remove_silence_from_file, args): args[0] for args in args_list}
+                
+                for future in as_completed(future_to_file):
+                    success, file = future.result()
+                    if success:
+                        successful += 1
+            
+            self.progress.emit(f"Silence removal complete. Successfully processed {successful}/{total} files.")
+            self.finished.emit(True, successful)
+        except Exception as e:
+            logging.error(f"Error during silence removal: {e}")
+            self.finished.emit(False, 0)
 
 # ----------------------------
-# PyQt5 Worker Classes
+# New Feature: Organize MP3 Files by Date and Create ZIP archives
 # ----------------------------
 
-class MergeWorker(QtCore.QObject):
+class OrganizeWorker(QtCore.QObject):
     """
-    Worker object to run the merge process in a separate thread.
-    Emits a finished signal when done.
+    Worker object to organize MP3 files by date, move them to folders, and create ZIP archives.
     """
-    finished = QtCore.pyqtSignal(bool, str, list)  # success, output_path, merged_files
+    finished = QtCore.pyqtSignal(bool, int, int)  # success flag, folder count, zip count
     progress = QtCore.pyqtSignal(str)
     
-    def __init__(self, files, output_dir, parent=None):
+    def __init__(self, path_to_7zip, parent=None):
         super().__init__(parent)
-        self.files = files
-        self.output_dir = output_dir
+        self.path_to_7zip = path_to_7zip
         
     @QtCore.pyqtSlot()
     def run(self):
-        self.progress.emit("Merging files...")
-        success, output_path = process_files(self.files, self.output_dir)
-        self.finished.emit(success, output_path if output_path else "", self.files)
-
-class ConvertWorker(QtCore.QObject):
-    """
-    Worker object to run MP4 to MP3 conversion in a separate thread.
-    Emits a finished signal when done.
-    """
-    finished = QtCore.pyqtSignal(bool, int)  # success, count of files converted
-    progress = QtCore.pyqtSignal(str)
-    
-    @QtCore.pyqtSlot()
-    def run(self):
-        self.progress.emit("Converting MP4 files to MP3...")
-        mp4_files = [f for f in os.listdir(directory) if f.lower().endswith('.mp4')]
-        count = 0
-        if not mp4_files:
-            self.finished.emit(False, count)
+        self.progress.emit("Organizing MP3 files by date...")
+        
+        # Check if 7-Zip exists
+        if not os.path.isfile(self.path_to_7zip):
+            logging.error("7-Zip executable not found at %s", self.path_to_7zip)
+            self.progress.emit("Warning: 7-Zip not found. Files will be organized without creating ZIP archives.")
+            can_zip = False
+        else:
+            can_zip = True
+        
+        # Working directory
+        working_directory = os.getcwd()
+        
+        # Get all mp3 files in the current directory
+        mp3_files = [f for f in os.listdir(working_directory) if f.lower().endswith('.mp3')]
+        
+        # Create a dictionary to store files by date
+        files_by_date = defaultdict(list)
+        
+        # Extract date and time and organize files by date
+        for file in mp3_files:
+            date, time = parse_date_and_time_from_filename(file)
+            if date and time:
+                formatted_date = date.strftime('%Y%m%d')  # Format as YYYYMMDD
+                files_by_date[formatted_date].append((time.strftime('%H-%M'), file))
+        
+        if not files_by_date:
+            self.progress.emit("No MP3 files with valid date/time found.")
+            self.finished.emit(False, 0, 0)
             return
+        
         try:
-            with ThreadPoolExecutor() as executor:
-                list(executor.map(convert_mp4_to_mp3, mp4_files))
-            count = len(mp4_files)
-            self.finished.emit(True, count)
+            # Process date groups in parallel
+            total_dates = len(files_by_date)
+            self.progress.emit(f"Organizing {total_dates} date groups...")
+            
+            # Create arguments for parallel processing
+            args_list = [(date, files, working_directory, self.progress.emit, i, total_dates) 
+                        for i, (date, files) in enumerate(files_by_date.items())]
+            
+            # Process date groups in parallel
+            processed_folders = []
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_dates)) as executor:
+                future_to_date = {executor.submit(process_date_group, args): args[0] for args in args_list}
+                
+                for future in as_completed(future_to_date):
+                    date, folder_path, success = future.result()
+                    if success and folder_path:
+                        folder_name = os.path.basename(folder_path)
+                        processed_folders.append((folder_name, folder_path))
+            
+            folder_count = len(processed_folders)
+            
+            # Create ZIP archives in parallel if 7-Zip is available
+            zip_count = 0
+            if can_zip and processed_folders:
+                total_folders = len(processed_folders)
+                self.progress.emit(f"Creating {total_folders} ZIP archives...")
+                
+                # Create arguments for parallel ZIP creation
+                zip_args_list = [(folder_name, folder_path, self.path_to_7zip, working_directory, self.progress.emit, i, total_folders) 
+                               for i, (folder_name, folder_path) in enumerate(processed_folders)]
+                
+                # Create ZIP archives in parallel
+                with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_folders)) as executor:
+                    future_to_folder = {executor.submit(create_zip_archive, args): args[0] for args in zip_args_list}
+                    
+                    for future in as_completed(future_to_folder):
+                        folder_name, success = future.result()
+                        if success:
+                            zip_count += 1
+            
+            self.progress.emit(f"Organization complete. Created {folder_count} folders and {zip_count} ZIP archives.")
+            self.finished.emit(True, folder_count, zip_count)
         except Exception as e:
-            logging.error("Error during MP4 to MP3 conversion: %s", e)
-            self.finished.emit(False, count)
+            logging.error(f"Error during organization: {e}")
+            self.finished.emit(False, 0, 0)
 
 # ----------------------------
 # PyQt5 GUI Implementation
@@ -317,17 +595,87 @@ class MainWindow(QtWidgets.QMainWindow):
         self.convertButton.clicked.connect(self.convertMp4Files)
         buttonLayout.addWidget(self.convertButton)
         
-        # New button to remove silence from selected audio files
+        # Button to remove silence from selected audio files
         self.removeSilenceButton = QtWidgets.QPushButton("Remove Silence")
         self.removeSilenceButton.clicked.connect(self.removeSilenceSelectedFiles)
         buttonLayout.addWidget(self.removeSilenceButton)
         
+        # New button for organizing files by date and creating ZIP archives
+        self.organizeButton = QtWidgets.QPushButton("Organize Files")
+        self.organizeButton.clicked.connect(self.organizeFiles)
+        buttonLayout.addWidget(self.organizeButton)
+        
         layout.addLayout(buttonLayout)
         
-        # Indefinite progress bar (hidden until an operation starts)
+        # Progress bar
         self.progressBar = QtWidgets.QProgressBar()
         self.progressBar.setVisible(False)
         layout.addWidget(self.progressBar)
+        
+        # Status label for showing current operation
+        self.statusLabel = QtWidgets.QLabel("")
+        layout.addWidget(self.statusLabel)
+
+        # Add a separator to distinguish file operation buttons from selection buttons
+        buttonLayout.addStretch()
+
+        # Button to select all files
+        self.selectAllButton = QtWidgets.QPushButton("Select All Files")
+        self.selectAllButton.clicked.connect(self.selectAllFiles)
+        buttonLayout.addWidget(self.selectAllButton)
+
+        # Button to deselect all files
+        self.deselectAllButton = QtWidgets.QPushButton("Deselect All")
+        self.deselectAllButton.clicked.connect(self.deselectAllFiles)
+        buttonLayout.addWidget(self.deselectAllButton)
+        
+        # Add the thread count configuration
+        configLayout = QtWidgets.QHBoxLayout()
+        
+        configLayout.addWidget(QtWidgets.QLabel("Max Parallel Tasks:"))
+        
+        self.threadCountSpinner = QtWidgets.QSpinBox()
+        self.threadCountSpinner.setMinimum(1)
+        self.threadCountSpinner.setMaximum(64)
+        self.threadCountSpinner.setValue(MAX_WORKERS)
+        self.threadCountSpinner.valueChanged.connect(self.updateThreadCount)
+        configLayout.addWidget(self.threadCountSpinner)
+        
+        configLayout.addStretch()
+        
+        # Add CPU core indicator
+        cpu_cores = os.cpu_count()
+        configLayout.addWidget(QtWidgets.QLabel(f"CPU Cores: {cpu_cores}"))
+        
+        layout.addLayout(configLayout)
+
+    def updateThreadCount(self, value):
+        """Update the MAX_WORKERS global variable when the spinner changes."""
+        global MAX_WORKERS
+        MAX_WORKERS = value
+        logging.info(f"Maximum worker threads set to: {MAX_WORKERS}")
+
+    def selectAllFiles(self):
+        root = self.treeWidget.invisibleRootItem()
+        count = 0
+        for i in range(root.childCount()):
+            dateItem = root.child(i)
+            for j in range(dateItem.childCount()):
+                childItem = dateItem.child(j)
+                if not childItem.isDisabled():
+                    childItem.setCheckState(0, QtCore.Qt.Checked)
+                    count += 1
+        self.statusLabel.setText(f"Selected {count} files.")
+
+    def deselectAllFiles(self):
+        root = self.treeWidget.invisibleRootItem()
+        for i in range(root.childCount()):
+            dateItem = root.child(i)
+            for j in range(dateItem.childCount()):
+                childItem = dateItem.child(j)
+                if not childItem.isDisabled():
+                    childItem.setCheckState(0, QtCore.Qt.Unchecked)
+        self.statusLabel.setText("All files deselected.")
         
     def refreshFileList(self):
         """
@@ -429,16 +777,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.progressBar.setVisible(True)
         self.progressBar.setRange(0, 0)  # indefinite (busy) indicator
-        self.mergeButton.setEnabled(False)
-        self.mergeAllButton.setEnabled(False)
-        self.refreshButton.setEnabled(False)
-        self.convertButton.setEnabled(False)
-        self.removeSilenceButton.setEnabled(False)
+        self.statusLabel.setText("Merging files...")
+        self.disableButtons()
         
         self.thread = QtCore.QThread()
         self.worker = MergeWorker(files, OUTPUT_DIR)
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
+        self.worker.progress.connect(self.updateStatus)
         self.worker.finished.connect(self.onMergeFinished)
         self.worker.finished.connect(self.thread.quit)
         self.worker.finished.connect(self.worker.deleteLater)
@@ -451,11 +797,8 @@ class MainWindow(QtWidgets.QMainWindow):
         Updates the UI and marks the merged files as merged.
         """
         self.progressBar.setVisible(False)
-        self.mergeButton.setEnabled(True)
-        self.mergeAllButton.setEnabled(True)
-        self.refreshButton.setEnabled(True)
-        self.convertButton.setEnabled(True)
-        self.removeSilenceButton.setEnabled(True)
+        self.statusLabel.setText("")
+        self.enableButtons()
         if success:
             QtWidgets.QMessageBox.information(self, "Merge Complete",
                                               f"Merge completed successfully!\nOutput: {output_path}")
@@ -471,16 +814,14 @@ class MainWindow(QtWidgets.QMainWindow):
         """
         self.progressBar.setVisible(True)
         self.progressBar.setRange(0, 0)  # indefinite (busy) indicator
-        self.mergeButton.setEnabled(False)
-        self.mergeAllButton.setEnabled(False)
-        self.refreshButton.setEnabled(False)
-        self.convertButton.setEnabled(False)
-        self.removeSilenceButton.setEnabled(False)
+        self.statusLabel.setText("Converting MP4 files to MP3...")
+        self.disableButtons()
         
         self.convertThread = QtCore.QThread()
         self.convertWorker = ConvertWorker()
         self.convertWorker.moveToThread(self.convertThread)
         self.convertThread.started.connect(self.convertWorker.run)
+        self.convertWorker.progress.connect(self.updateStatus)
         self.convertWorker.finished.connect(self.onConvertFinished)
         self.convertWorker.finished.connect(self.convertThread.quit)
         self.convertWorker.finished.connect(self.convertWorker.deleteLater)
@@ -493,11 +834,8 @@ class MainWindow(QtWidgets.QMainWindow):
         Updates the UI and notifies the user.
         """
         self.progressBar.setVisible(False)
-        self.mergeButton.setEnabled(True)
-        self.mergeAllButton.setEnabled(True)
-        self.refreshButton.setEnabled(True)
-        self.convertButton.setEnabled(True)
-        self.removeSilenceButton.setEnabled(True)
+        self.statusLabel.setText("")
+        self.enableButtons()
         if success:
             QtWidgets.QMessageBox.information(self, "Conversion Complete",
                                               f"Successfully converted {count} MP4 files to MP3.")
@@ -523,16 +861,14 @@ class MainWindow(QtWidgets.QMainWindow):
         
         self.progressBar.setVisible(True)
         self.progressBar.setRange(0, 0)  # indefinite (busy) indicator
-        self.mergeButton.setEnabled(False)
-        self.mergeAllButton.setEnabled(False)
-        self.refreshButton.setEnabled(False)
-        self.convertButton.setEnabled(False)
-        self.removeSilenceButton.setEnabled(False)
+        self.statusLabel.setText("Removing silence from audio files...")
+        self.disableButtons()
         
         self.silenceThread = QtCore.QThread()
         self.silenceWorker = RemoveSilenceWorker(all_files)
         self.silenceWorker.moveToThread(self.silenceThread)
         self.silenceThread.started.connect(self.silenceWorker.run)
+        self.silenceWorker.progress.connect(self.updateStatus)
         self.silenceWorker.finished.connect(self.onRemoveSilenceFinished)
         self.silenceWorker.finished.connect(self.silenceThread.quit)
         self.silenceWorker.finished.connect(self.silenceWorker.deleteLater)
@@ -545,11 +881,8 @@ class MainWindow(QtWidgets.QMainWindow):
         Updates the UI and notifies the user.
         """
         self.progressBar.setVisible(False)
-        self.mergeButton.setEnabled(True)
-        self.mergeAllButton.setEnabled(True)
-        self.refreshButton.setEnabled(True)
-        self.convertButton.setEnabled(True)
-        self.removeSilenceButton.setEnabled(True)
+        self.statusLabel.setText("")
+        self.enableButtons()
         if success:
             QtWidgets.QMessageBox.information(self, "Silence Removal Complete",
                                               f"Removed silence from {count} file(s).")
@@ -558,6 +891,103 @@ class MainWindow(QtWidgets.QMainWindow):
                                           "An error occurred during silence removal.")
         # Refresh the file list in case new MP3 files were created.
         self.refreshFileList()
+    
+    def organizeFiles(self):
+        """
+        Organize MP3 files by date, move them to folders, and create ZIP archives.
+        """
+        reply = QtWidgets.QMessageBox.question(
+            self, 
+            "Organize Files", 
+            "This will organize all MP3 files by date, move them to folders, and create ZIP archives. Continue?",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+            QtWidgets.QMessageBox.No
+        )
+        
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        
+        # Ask for the path to 7-Zip if not found in config
+        path_to_7zip = PATH_TO_7ZIP
+        if not os.path.isfile(path_to_7zip):
+            path_to_7zip, _ = QtWidgets.QFileDialog.getOpenFileName(
+                self,
+                "Select 7-Zip Executable",
+                os.path.expanduser("~"),
+                "Executable Files (*.exe)"
+            )
+            if not path_to_7zip:
+                path_to_7zip = ""  # Empty string will trigger the warning in the worker
+        
+        self.progressBar.setVisible(True)
+        self.progressBar.setRange(0, 0)  # indefinite (busy) indicator
+        self.statusLabel.setText("Organizing files by date...")
+        self.disableButtons()
+        
+        self.organizeThread = QtCore.QThread()
+        self.organizeWorker = OrganizeWorker(path_to_7zip)
+        self.organizeWorker.moveToThread(self.organizeThread)
+        self.organizeThread.started.connect(self.organizeWorker.run)
+        self.organizeWorker.progress.connect(self.updateStatus)
+        self.organizeWorker.finished.connect(self.onOrganizeFinished)
+        self.organizeWorker.finished.connect(self.organizeThread.quit)
+        self.organizeWorker.finished.connect(self.organizeWorker.deleteLater)
+        self.organizeThread.finished.connect(self.organizeThread.deleteLater)
+        self.organizeThread.start()
+    
+    def onOrganizeFinished(self, success, folder_count, zip_count):
+        """
+        Called when the organization worker finishes.
+        Updates the UI and notifies the user.
+        """
+        self.progressBar.setVisible(False)
+        self.statusLabel.setText("")
+        self.enableButtons()
+        if success:
+            QtWidgets.QMessageBox.information(
+                self, 
+                "Organization Complete",
+                f"Successfully organized files into {folder_count} folders and created {zip_count} ZIP archives."
+            )
+        else:
+            QtWidgets.QMessageBox.warning(
+                self, 
+                "Organization",
+                "An error occurred during file organization."
+            )
+        # Refresh the file list in case files were moved
+        self.refreshFileList()
+    
+    def updateStatus(self, message):
+        """
+        Update the status label with the current operation message.
+        """
+        self.statusLabel.setText(message)
+    
+    def disableButtons(self):
+        self.mergeButton.setEnabled(False)
+        self.mergeAllButton.setEnabled(False)
+        self.refreshButton.setEnabled(False)
+        self.convertButton.setEnabled(False)
+        self.removeSilenceButton.setEnabled(False)
+        self.organizeButton.setEnabled(False)
+        self.selectAllButton.setEnabled(False)  # Disable select all button
+        self.deselectAllButton.setEnabled(False)  # Disable deselect all button
+        self.threadCountSpinner.setEnabled(False)  # Disable thread count spinner
+    
+    def enableButtons(self):
+        """
+        Enable all operation buttons after a background task completes.
+        """
+        self.mergeButton.setEnabled(True)
+        self.mergeAllButton.setEnabled(True)
+        self.refreshButton.setEnabled(True)
+        self.convertButton.setEnabled(True)
+        self.removeSilenceButton.setEnabled(True)
+        self.organizeButton.setEnabled(True)
+        self.selectAllButton.setEnabled(True)  # Enable select all button
+        self.deselectAllButton.setEnabled(True)  # Enable deselect all button
+        self.threadCountSpinner.setEnabled(True)  # Enable thread count spinner
 
 if __name__ == "__main__":
     import platform
