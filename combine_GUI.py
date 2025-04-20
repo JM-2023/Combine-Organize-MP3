@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+import functools
 import os
 import sys
 import re
@@ -1412,8 +1413,9 @@ class MainWindow(QtWidgets.QMainWindow):
         worker.finished.connect(finish_slot) # Connect to specific finish handler
         worker.finished.connect(self.onTaskFinished) # Connect to generic handler
         worker.finished.connect(thread.quit) # Quit thread when worker finishes
-        # Schedule cleanup after the event loop processes the finished signal
-        worker.finished.connect(lambda w=worker, t=thread: self.schedule_worker_cleanup(w, t))
+        # Schedule cleanup using functools.partial
+        cleanup_slot = functools.partial(self.schedule_worker_cleanup, worker, thread)
+        worker.finished.connect(cleanup_slot)
 
         # Store references for potential management (though cleanup is scheduled)
         if not hasattr(self, 'active_threads'):
