@@ -12,125 +12,107 @@ from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 import platform # Import platform
-
-# moviepy imports
+import traceback # Import traceback for detailed error logging
+# moviepy imports (still needed for MP3 merging)
 from moviepy.editor import concatenate_audioclips, AudioFileClip
-
 # PyQt5 imports
 from PyQt5 import QtCore, QtWidgets, QtGui # Import QtGui to use QIcon
-
 # Set up logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s [%(levelname)s] %(message)s',
     datefmt='%H:%M:%S'
 )
-
 # ----------------------------
 # Configuration and Utility Functions
 # ----------------------------
-
 def load_config():
     """Load configuration from config.json"""
     config_path = os.path.join(os.getcwd(), "config.json")
     if os.path.isfile(config_path):
         try:
-            # Specify UTF-8 encoding, though JSON standard is usually fine without it
             with open(config_path, "r", encoding='utf-8') as f:
                 return json.load(f)
         except Exception as e:
             logging.warning("Failed to load config.json: %s", e)
     return {}
-
 config = load_config()
-
 # Configuration defaults
 DATE_TIME_REGEX = config.get("date_time_regex", r'(\d{4}-\d{2}-\d{2}) (\d{2}-\d{2}(-\d{2})?)')
 DEFAULT_DATE_FORMAT = config.get("default_date_format", "%Y-%m-%d")
 DEFAULT_TIME_FORMAT = config.get("default_time_format", "%H-%M-%S")
 OUTPUT_DIR = config.get("default_output_dir", None)  # If None, use current directory
 PATH_TO_7ZIP = config.get("path_to_7zip", "C:\\Program Files\\7-Zip\\7z.exe")  # Default path to 7-Zip
+# Default FFmpeg path: ffmpeg.exe in script dir for Windows, ffmpeg for other OS
+default_ffmpeg_name = "ffmpeg.exe" if platform.system() == "Windows" else "ffmpeg"
+PATH_TO_FFMPEG = config.get("path_to_ffmpeg", os.path.join(os.getcwd(), default_ffmpeg_name))
 # Set the max number of parallel tasks based on CPU cores
-# Ensure os.cpu_count() returns a value, default to 1 if it returns None
 MAX_WORKERS = config.get("max_workers", min(32, (os.cpu_count() or 1) * 2 + 4))
-
 # Ensure the output directory exists
-current_directory = os.getcwd() # Rename 'directory' to avoid conflict with built-in names
+current_directory = os.getcwd()
 output_directory_path = OUTPUT_DIR if OUTPUT_DIR else current_directory
 if not os.path.exists(output_directory_path):
     os.makedirs(output_directory_path, exist_ok=True)
 
-def load_audio_clip(file_path):
+def load_audio_clip(file_path): # Still used by MP3 merging
     """
     Load an audio clip from the given file path using moviepy.
     Returns the AudioFileClip if successful, otherwise returns None.
     """
     try:
-        # Check if file exists and is not empty
         if not os.path.exists(file_path) or os.path.getsize(file_path) == 0:
              logging.warning("File does not exist or is empty: %s", file_path)
              return None
         clip = AudioFileClip(file_path)
-        # Additional check to ensure clip loaded successfully and has duration
         if clip is None or clip.duration is None or clip.duration <= 0:
             logging.warning("Failed to load clip or clip has invalid duration: %s", file_path)
             if clip:
-                clip.close() # Attempt to close to release resources
+                clip.close()
             return None
         return clip
     except Exception as e:
-        # More detailed error logging
-        import traceback
         logging.error("Error loading clip %s: %s\n%s", file_path, e, traceback.format_exc())
         return None
 
-# Compile regex pattern
 date_time_pattern = re.compile(DATE_TIME_REGEX)
-
 def parse_date_and_time_from_filename(filename):
     """Parse the date and time from the filename using the regex."""
     match = date_time_pattern.search(filename)
     if match:
-        # Ensure capture groups exist
         groups = match.groups()
         if len(groups) >= 2:
             date_str = groups[0]
             time_str = groups[1]
-            # Try format with seconds if the third group (seconds) exists and is not None
+            # Check if the optional seconds part (group 3) was captured
             time_format_to_try = DEFAULT_TIME_FORMAT if len(groups) > 2 and groups[2] else "%H-%M"
-
+            
             parsed_date = None
             parsed_time = None
-
             try:
                 parsed_date = datetime.strptime(date_str, DEFAULT_DATE_FORMAT).date()
             except ValueError:
                 logging.warning(f"Could not parse date '{date_str}' with format '{DEFAULT_DATE_FORMAT}' (from file: {filename})")
-                return None, None # If date is invalid, return immediately
-
+                return None, None
             try:
                 parsed_time = datetime.strptime(time_str, time_format_to_try).time()
             except ValueError:
-                # If format with seconds failed, try format without seconds
-                if time_format_to_try == DEFAULT_TIME_FORMAT:
+                # If the primary attempt failed, and it was using DEFAULT_TIME_FORMAT (implying seconds might be expected)
+                # try parsing as HH-MM just in case the filename was missing seconds contrary to expectation.
+                if time_format_to_try == DEFAULT_TIME_FORMAT and DEFAULT_TIME_FORMAT != "%H-%M": # Avoid re-trying if already %H-%M
                     try:
                         parsed_time = datetime.strptime(time_str, "%H-%M").time()
                     except ValueError:
                         logging.warning(f"Could not parse time '{time_str}' with format '{DEFAULT_TIME_FORMAT}' or '%H-%M' (from file: {filename})")
-                        # To maintain consistency with original logic, return None, None if time fails
                         return None, None
-                else: # If the format without seconds (%H-%M) also failed
-                    logging.warning(f"Could not parse time '{time_str}' with format '%H-%M' (from file: {filename})")
+                else: # If the initial try was already %H-%M or some other format, just log the failure for that.
+                    logging.warning(f"Could not parse time '{time_str}' with format '{time_format_to_try}' (from file: {filename})")
                     return None, None
-
             return parsed_date, parsed_time
         else:
              logging.warning(f"Regex matched in filename '{filename}', but capture groups are insufficient.")
     else:
-        # Use debug level for non-matching files to avoid flooding logs
         logging.debug(f"Date/time pattern not found in filename '{filename}'.")
     return None, None
-
 
 def parse_time_from_filename(filename):
     """Return a datetime combining the parsed date and time (or a minimal datetime if parsing fails)."""
@@ -140,521 +122,404 @@ def parse_time_from_filename(filename):
             return datetime.combine(date, time)
         except Exception as e:
              logging.error(f"Error combining date {date} and time {time} (from file: {filename}): {e}")
-             return datetime.min # Return min on error
-    return datetime.min # Return min on parsing failure
+             return datetime.min # Return earliest possible datetime on error for sorting
+    return datetime.min # Return earliest possible datetime if parsing fails
 
 # ----------------------------
-# Merging Function for MP3 Files (supports multiple days)
+# Merging Function for MP3 Files (uses MoviePy)
 # ----------------------------
-
 def process_files(files, output_dir_path, progress_callback=None):
-    """
-    Given a list of MP3 file names (which may come from different days), load, concatenate,
-    and write the merged MP3 file. Returns (success_flag, output_file_path).
-
-    Parameters:
-        files (list): List of MP3 file names to process
-        output_dir_path (str): Directory path to save the output file
-        progress_callback (function): Optional callback function to report progress
-    """
     if not files:
         logging.warning("No files provided for processing.")
         return False, None
 
-    # Sort files by the parsed datetime
     try:
-        # Add error handling in case parse_time_from_filename returns non-datetime objects
-        files.sort(key=lambda x: parse_time_from_filename(x))
+        # Sort files chronologically. This is crucial for correct merge order and naming.
+        files.sort(key=lambda x: parse_time_from_filename(os.path.basename(x)))
     except TypeError as e:
         logging.error(f"Error sorting files, possibly due to invalid datetime parsing: {e}")
-        # Optionally stop here, or try to continue (order might be wrong)
-        return False, None # Choose to stop to avoid potential issues
+        return False, None
 
-    file_paths = [os.path.join(current_directory, f) for f in files]
+    # Note: 'files' now contains basenames, sorted.
+    # We will load them using full paths, but keep track using basenames.
 
     if progress_callback:
         progress_callback(f"Loading {len(files)} audio files...")
 
-    # Load audio clips in parallel
-    audio_clips = []
-    valid_files_for_merge = [] # Store original filenames of successfully loaded and valid clips
+    loaded_clip_data = {}  # Stores successfully loaded clips: {basename: clip_object}
+    
     with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
-        # Map future to (file_path, original_filename) for better error reporting and filename tracking
-        future_to_file = {executor.submit(load_audio_clip, file_path): (file_path, os.path.basename(file_path)) for file_path in file_paths}
-
+        # Create futures, mapping them to the original basename for later retrieval
+        future_to_basename = {
+            executor.submit(load_audio_clip, os.path.join(current_directory, basename)): basename
+            for basename in files
+        }
         processed_count = 0
-        for future in as_completed(future_to_file):
-            file_path, original_filename = future_to_file[future]
+        for future in as_completed(future_to_basename):
+            basename = future_to_basename[future]
             processed_count += 1
-            if progress_callback: # Update progress in real-time
-                 progress_callback(f"Loaded {processed_count}/{len(files)} audio files...")
-
+            if progress_callback:
+                 progress_callback(f"Loading {processed_count}/{len(files)} audio files (async)...")
             try:
                 clip = future.result()
-                # Ensure clip is not None and has a valid duration
                 if clip and clip.duration is not None and clip.duration > 0:
-                    audio_clips.append(clip)
-                    valid_files_for_merge.append(original_filename) # Add corresponding original filename
+                    loaded_clip_data[basename] = clip
                 elif clip:
-                     logging.warning(f"Skipping file (invalid duration or loading issue): {file_path}")
-                     clip.close() # Attempt to close if clip exists but is invalid
+                     logging.warning(f"Skipping file (invalid duration or loading issue): {basename}")
+                     clip.close() # Close the invalid clip
                 else:
-                     logging.warning(f"Skipping file (load failed): {file_path}")
-
+                     logging.warning(f"Skipping file (load failed): {basename}")
             except Exception as e:
-                import traceback
-                logging.error(f"An error occurred while processing file {file_path}: {e}\n{traceback.format_exc()}")
+                # Log the error with the specific basename that caused it
+                logging.error(f"An error occurred while loading/processing file {basename}: {e}\n{traceback.format_exc()}")
 
+    # Reconstruct audio_clips and valid_files_for_merge in the originally sorted order
+    audio_clips = []
+    valid_files_for_merge = [] # List of basenames that were successfully loaded
+    skipped_count = 0
 
+    for basename_in_sorted_order in files: # Iterate through the *originally sorted* list of basenames
+        if basename_in_sorted_order in loaded_clip_data:
+            audio_clips.append(loaded_clip_data[basename_in_sorted_order])
+            valid_files_for_merge.append(basename_in_sorted_order)
+        else:
+            # This file was in the input 'files' list but failed to load or was invalid.
+            # Logging for this specific skip already happened inside the thread pool loop or by load_audio_clip.
+            skipped_count += 1
+            
     if not audio_clips:
-        logging.warning("No valid audio clips found in the selection.")
+        logging.warning("No valid audio clips found after attempting to load all selected files.")
         if progress_callback:
             progress_callback("No valid audio clips found.")
+        # Clean up any clips that were loaded but not added to audio_clips (e.g., if process exits early)
+        for clip_to_close in loaded_clip_data.values():
+            # Check if it's not in audio_clips (though audio_clips is empty here)
+            # This is more a safeguard for any loaded clips if the lists weren't populated
+            try: 
+                if clip_to_close not in audio_clips: # Defensive check
+                    clip_to_close.close()
+            except Exception: pass # Errors during close are less critical here
         return False, None
 
-    # Log a warning if not all files were loaded successfully
-    if len(valid_files_for_merge) < len(files):
-         logging.warning(f"Note: {len(files) - len(valid_files_for_merge)} file(s) were skipped due to loading errors or invalid duration.")
+    if skipped_count > 0:
+         logging.warning(f"Note: {skipped_count} file(s) were skipped due to loading errors or invalid duration.")
+    
+    # At this point, valid_files_for_merge contains basenames of successfully loaded files,
+    # and audio_clips contains the corresponding clip objects, both in correct chronological order.
 
-
-    # Ensure we only use successfully loaded filenames to determine the output name
+    # This check should ideally be redundant if 'if not audio_clips:' above is effective.
     if not valid_files_for_merge:
          logging.error("No files loaded successfully, cannot determine output filename.")
-         # Clean up loaded clips
-         for c in audio_clips:
-             c.close()
+         # audio_clips would be empty here, so closing them is a no-op.
+         # Clean up any clips in loaded_clip_data that might exist
+         for clip_to_close in loaded_clip_data.values():
+             try: clip_to_close.close()
+             except Exception: pass
          return False, None
 
-    # Use the first and last *valid* file for naming
-    first_valid_clip_filename = valid_files_for_merge[0]
-    last_valid_clip_filename = valid_files_for_merge[-1]
-
+    # Determine output filename based on the *first successfully loaded file in chronological order*
+    first_valid_clip_filename = valid_files_for_merge[0] 
     first_date, first_time = parse_date_and_time_from_filename(first_valid_clip_filename)
-    # Parse date from the last valid filename, time part not needed
-    last_date_str = ""
-    match_last = date_time_pattern.search(last_valid_clip_filename)
-    if match_last:
-        last_date_str = match_last.group(1) # Get only the date part 'YYYY-MM-DD'
-    else:
-        logging.warning(f"Could not parse date from the last valid filename '{last_valid_clip_filename}'. Using the first date.")
-        # Fallback to first_date if available, or handle error
-        last_date_str = first_date.strftime(DEFAULT_DATE_FORMAT) if first_date else "" # Use first date if available
-
 
     if not first_date or not first_time:
         logging.error(f"Could not parse date/time from the first valid filename: {first_valid_clip_filename}")
-         # Clean up loaded clips
-        for c in audio_clips:
-             c.close()
+        for c in audio_clips: c.close()
+        # Also close clips in loaded_clip_data that might not be in audio_clips if something went wrong
+        for basename, clip_obj in loaded_clip_data.items():
+            if clip_obj not in audio_clips : # Defensive
+                try: clip_obj.close()
+                except: pass
         return False, None
 
-    # Format dates as YYYYMMDD
     first_date_formatted = first_date.strftime('%Y%m%d')
-    # Parse last_date_str to format it (if different from first_date)
-    last_date_formatted = ""
-    if last_date_str:
-        try:
-             last_date_obj = datetime.strptime(last_date_str, DEFAULT_DATE_FORMAT).date()
-             if last_date_obj != first_date:
-                 last_date_formatted = last_date_obj.strftime('%Y%m%d')
-             else:
-                 last_date_formatted = first_date_formatted # Dates are the same
-        except ValueError:
-             logging.warning(f"Could not convert parsed last date string '{last_date_str}' to date object. Using the first date.")
-             last_date_formatted = first_date_formatted # Fallback to first date
-
-
-    # Create an output filename.
-    time_formatted = first_time.strftime('%H-%M') # Always use the time from the first file
-    if first_date_formatted == last_date_formatted or not last_date_formatted:
-         # Same date or last date couldn't be parsed
-         output_filename = f"{first_date_formatted} {time_formatted}.mp3"
-    else:
-         # Different dates
-         output_filename = f"{first_date_formatted}-{last_date_formatted} {time_formatted}.mp3"
-
-    # -- Sanitize output filename --
-    # Remove or replace characters that might be illegal in filenames (e.g., / \ : * ? " < > |)
-    output_filename = re.sub(r'[\\/*?:"<>|]', '_', output_filename)
-    # Could also limit filename length if needed
-
+    time_formatted = first_time.strftime('%H-%M') # Using %H-%M for output filename time consistently
+    
+    output_filename = f"{first_date_formatted} {time_formatted}.mp3"
+    output_filename = re.sub(r'[\\/*?:"<>|]', '_', output_filename) # Sanitize filename
     output_path = os.path.join(output_dir_path, output_filename)
-
 
     total_duration = sum(clip.duration for clip in audio_clips)
     minutes = int(total_duration // 60)
     seconds = int(total_duration % 60)
-    logging.info(f"Merging {len(audio_clips)} valid files (from {len(files)} selected), total duration: {minutes}m {seconds}s. Output to: {output_filename}")
-
-
+    
+    logging.info(f"Merging {len(audio_clips)} valid files (from {len(files)} selected initially), total duration: {minutes}m {seconds}s. Output to: {output_filename}")
     if progress_callback:
         progress_callback(f"Merging {len(audio_clips)} audio clips ({minutes}m {seconds}s total)...")
-
-    final_clip = None # Initialize final_clip
+    
+    final_clip = None
     try:
+        # Concatenate clips in the correct, sorted order
         final_clip = concatenate_audioclips(audio_clips)
         if progress_callback:
             progress_callback(f"Writing final audio file to {output_filename}...")
-
-        # Use logger=None to prevent moviepy console output unless debugging
-        # Show progress bar only if logging level is DEBUG
-        final_clip.write_audiofile(output_path, codec='mp3', logger='bar' if logging.getLogger().isEnabledFor(logging.DEBUG) else None)
-
+        
+        # Use logger='bar' only if DEBUG logging is enabled for MoviePy's progress bar
+        moviepy_logger = 'bar' if logging.getLogger().isEnabledFor(logging.DEBUG) else None
+        final_clip.write_audiofile(output_path, codec='mp3', logger=moviepy_logger)
+        
         logging.info(f"Merge complete! Output saved as: {output_path}")
         return True, output_path
     except Exception as e:
-        import traceback
-        logging.error("Error during merging: %s\n%s", e, traceback.format_exc())
+        logging.error("Error during merging or writing audio file: %s\n%s", e, traceback.format_exc())
         return False, None
     finally:
-        # Ensure all clips are closed, including the final one
+        # Close all individual clips that were part of audio_clips
         for c in audio_clips:
-            try:
-                c.close()
-            except Exception as close_err:
-                 logging.warning(f"Error closing intermediate clip: {close_err}")
-        if final_clip: # Check if final_clip was successfully created
-             try:
-                 final_clip.close()
-             except Exception as close_err:
-                 logging.warning(f"Error closing final clip: {close_err}")
+            try: c.close()
+            except Exception as close_err: logging.warning(f"Error closing intermediate clip: {close_err}")
+        
+        # Close any other clips that were loaded but perhaps not added to audio_clips (defensive)
+        # This ensures all clips from loaded_clip_data are attempted to be closed.
+        for basename, clip_obj in loaded_clip_data.items():
+            if clip_obj not in audio_clips and clip_obj != final_clip : # Avoid double-closing
+                try: clip_obj.close()
+                except Exception as close_err: logging.warning(f"Error closing a loaded_clip_data clip: {close_err}")
 
-
+        if final_clip:
+             try: final_clip.close()
+             except Exception as close_err: logging.warning(f"Error closing final clip: {close_err}")
 # ----------------------------
-# Conversion Function: Convert MP4 to MP3
+# Conversion Function: Convert MP4 to MP3 (uses FFmpeg directly)
 # ----------------------------
-
 def convert_mp4_to_mp3(args):
-    """
-    Convert a single MP4 file to an MP3 file.
-    The output file will have the same base name with a .mp3 extension.
-
-    Parameters:
-        args (tuple): (video_file, progress_callback, index, total)
-    """
     video_file, progress_callback, index, total = args
-    clip = None # Initialize clip to None
-    try:
-        video_path = os.path.join(current_directory, video_file)
-        # Check if file exists
-        if not os.path.exists(video_path):
-            logging.error(f"File not found, cannot convert: {video_path}")
-            if progress_callback:
-                 progress_callback(f"Error {index+1}/{total}: File not found {video_file}")
-            return False, video_file
-
-        audio_file_base = os.path.splitext(video_file)[0]
-        audio_file = f"{audio_file_base}.mp3"
-        # Output to the current directory, could be changed to output_directory_path if needed
-        output_path = os.path.join(current_directory, audio_file)
-
-        # Extract audio using AudioFileClip
-        clip = AudioFileClip(video_path)
-        if clip is None or clip.duration is None or clip.duration <= 0:
-             logging.error(f"Could not load audio from {video_file} or audio has invalid duration.")
-             if clip: clip.close() # Attempt to close
-             if progress_callback:
-                 progress_callback(f"Error {index+1}/{total}: Cannot load audio {video_file}")
-             return False, video_file
-
-        # Write MP3 file, disable moviepy logger to keep console clean
-        clip.write_audiofile(output_path, codec='mp3', logger=None)
-        clip.close() # Close the clip to release resources
-        clip = None # Explicitly set back to None
-
+    video_path = os.path.join(current_directory, video_file)
+    audio_file_base = os.path.splitext(video_file)[0]
+    audio_file = f"{audio_file_base}.mp3"
+    output_path = os.path.join(current_directory, audio_file) # Output to current directory
+    if not os.path.exists(video_path):
+        logging.error(f"File not found, cannot convert: {video_path}")
         if progress_callback:
-            progress_callback(f"Converted {index+1}/{total}: {video_file} -> {audio_file}")
-        logging.info(f"Successfully converted {video_file} to {output_path}")
-        return True, video_file
-    except Exception as e:
-        import traceback
-        logging.error(f"Error converting {video_file}: {e}\n{traceback.format_exc()}")
-        if progress_callback:
-             progress_callback(f"Error {index+1}/{total}: Conversion failed {video_file}")
+            progress_callback(f"Error {index+1}/{total}: File not found {video_file}")
         return False, video_file
-    finally:
-        # Ensure clip is closed in any case (if it was created)
-        if clip:
-            try:
-                clip.close()
-            except Exception as close_err:
-                 logging.warning(f"Error closing clip for {video_file}: {close_err}")
-
-# ----------------------------
-# Function to process a file for silence removal
-# ----------------------------
-
-def remove_silence_from_file(args):
-    """
-    Remove silence from a single audio file using ffmpeg.
-
-    Parameters:
-        args (tuple): (file, ffmpeg_path, progress_callback, index, total)
-    """
-    file, ffmpeg_path, progress_callback, index, total = args
-
+    # FFmpeg availability should be checked by the calling worker (ConvertWorker)
+    # before starting tasks.
+    logging.info(f"Attempting conversion of {video_file} to MP3 using FFmpeg...")
+    command = [
+        PATH_TO_FFMPEG,
+        "-y",  # Overwrite output file if it exists
+        "-i", video_path,
+        "-vn",  # No video output
+        "-acodec", "mp3", # Explicitly set audio codec to MP3
+        # Optional: Add audio quality parameters like:
+        # "-b:a", "192k",   # Audio bitrate
+        # "-ar", "44100",   # Audio sample rate
+        # "-ac", "2",       # Number of audio channels
+        output_path
+    ]
     try:
-        input_file_path = os.path.join(current_directory, file)
-        # Check if input file exists
-        if not os.path.exists(input_file_path):
-             logging.error(f"File not found, cannot remove silence: {input_file_path}")
-             if progress_callback:
-                 progress_callback(f"Error {index+1}/{total}: File not found {file}")
-             return False, file
-
-        base, ext = os.path.splitext(file)
-        # Sanitize base name in case it contains illegal characters (less likely but safe)
-        safe_base = re.sub(r'[\\/*?:"<>|]', '_', base)
-        output_filename = f"{safe_base}_nosilence{ext}"
-        output_file_path = os.path.join(current_directory, output_filename)
-
-        # Use the silenceremove filter
-        # stop_periods=-1: Remove silence throughout the file, not just at the start.
-        # stop_duration=0.1: Silence must be at least 0.1 seconds long to be removed.
-        # stop_threshold=-50dB: Audio below -50dB is considered silence.
-        command = [
-            ffmpeg_path,
-            "-y",  # Overwrite output file if it exists
-            "-i", input_file_path,
-            "-af", "silenceremove=stop_periods=-1:stop_duration=0.1:stop_threshold=-50dB",
-            output_file_path
-        ]
-
-        # Run ffmpeg command
-        # Use subprocess.run and capture output for better error reporting
-        # Add startupinfo to prevent console window popup on Windows
         startupinfo = None
         if platform.system() == "Windows":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
-
-        # Run the command, capture output, don't check return code automatically
+        result = subprocess.run(command, check=False, capture_output=True, text=True,
+                                encoding='utf-8', errors='ignore', startupinfo=startupinfo)
+        if result.returncode == 0:
+            logging.info(f"FFmpeg successfully converted {video_file} to {output_path}")
+            if progress_callback:
+                progress_callback(f"Converted {index+1}/{total}: {video_file} -> {audio_file} (FFmpeg)")
+            return True, video_file
+        else:
+            logging.error(f"FFmpeg failed to convert '{video_file}'. Return code: {result.returncode}")
+            logging.error(f"FFmpeg stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
+            logging.error(f"FFmpeg stderr: {result.stderr.strip() if result.stderr else 'N/A'}")
+            if progress_callback:
+                progress_callback(f"Error {index+1}/{total}: FFmpeg conversion failed for {video_file}")
+            if os.path.exists(output_path): # Clean up potentially partial file
+                try: os.remove(output_path)
+                except OSError as rm_err: logging.warning(f"Could not delete failed FFmpeg output file {output_path}: {rm_err}")
+            return False, video_file
+    except Exception as e_ffmpeg_execution:
+        logging.error(f"Error during FFmpeg execution for {video_file}: {e_ffmpeg_execution}\n{traceback.format_exc()}")
+        if progress_callback:
+            progress_callback(f"Error {index+1}/{total}: FFmpeg execution crashed for {video_file}")
+        return False, video_file
+# ----------------------------
+# Function to process a file for silence removal (uses FFmpeg)
+# ----------------------------
+def remove_silence_from_file(args):
+    file, progress_callback, index, total = args
+    try:
+        input_file_path = os.path.join(current_directory, file)
+        if not os.path.exists(input_file_path):
+             logging.error(f"File not found, cannot remove silence: {input_file_path}")
+             if progress_callback:
+                 progress_callback(f"Error {index+1}/{total}: File not found {file}")
+             return False, file
+        base, ext = os.path.splitext(file)
+        safe_base = re.sub(r'[\\/*?:"<>|]', '_', base)
+        output_filename = f"{safe_base}_nosilence{ext}"
+        output_file_path = os.path.join(current_directory, output_filename)
+        command = [
+            PATH_TO_FFMPEG,
+            "-y", "-i", input_file_path,
+            "-af", "silenceremove=stop_periods=-1:stop_duration=0.1:stop_threshold=-50dB",
+            output_file_path
+        ]
+        startupinfo = None
+        if platform.system() == "Windows":
+            startupinfo = subprocess.STARTUPINFO()
+            startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+            startupinfo.wShowWindow = subprocess.SW_HIDE
         result = subprocess.run(command, check=False, capture_output=True, text=True, encoding='utf-8', errors='ignore', startupinfo=startupinfo)
-
         if result.returncode != 0:
             logging.error(f"ffmpeg failed to remove silence from '{file}'. Return code: {result.returncode}")
-            logging.error(f"FFmpeg stdout: {result.stdout}")
-            logging.error(f"FFmpeg stderr: {result.stderr}")
+            logging.error(f"FFmpeg stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
+            logging.error(f"FFmpeg stderr: {result.stderr.strip() if result.stderr else 'N/A'}")
             if progress_callback:
                  progress_callback(f"Error {index+1}/{total}: Processing failed {file}")
-            # Attempt to delete potentially incomplete output file
             if os.path.exists(output_file_path):
-                 try:
-                     os.remove(output_file_path)
-                 except OSError as rm_err:
-                     logging.warning(f"Could not delete failed output file {output_file_path}: {rm_err}")
+                 try: os.remove(output_file_path)
+                 except OSError as rm_err: logging.warning(f"Could not delete failed output file {output_file_path}: {rm_err}")
             return False, file
         else:
             if progress_callback:
                 progress_callback(f"Processed {index+1}/{total}: {file} -> {output_filename}")
             logging.info(f"Successfully removed silence from {file}, output as {output_filename}")
             return True, file
-
     except Exception as e:
-        import traceback
         logging.error(f"Unexpected error removing silence from {file}: {e}\n{traceback.format_exc()}")
         if progress_callback:
              progress_callback(f"Error {index+1}/{total}: Unexpected failure {file}")
         return False, file
-
 # ----------------------------
 # Function to process a date group for organization
 # ----------------------------
-
 def process_date_group(args):
-    """
-    Process a single date group for organization.
-    Creates a folder and moves files into it.
-
-    Parameters:
-        args (tuple): (date_str, files_with_time, working_directory, progress_callback, index, total_dates)
-                     date_str is in 'YYYYMMDD' format
-                     files_with_time is a list of (time_str, filename) tuples
-
-    Returns:
-        tuple: (date_str, folder_path, success)
-    """
     date_str, files_with_time, working_directory, progress_callback, index, total_dates = args
-
     try:
-        # Sort by time string ('HH-MM')
-        files_with_time.sort(key=lambda item: item[0])
-
-        # Folder name format: YYYYMMDD HH-MM (using the earliest time for that date)
-        first_time_str = files_with_time[0][0] # Get 'HH-MM' from the first file
-        folder_name = f"{date_str} {first_time_str}"
-        # Sanitize folder name for illegal characters
-        folder_name = re.sub(r'[\\/*?:"<>|]', '_', folder_name)
+        files_with_time.sort(key=lambda item: item[0]) # Sort by time string HH-MM
+        first_time_str = files_with_time[0][0]
+        folder_name = f"{date_str} {first_time_str}" # Date YYYYMMDD, Time HH-MM
+        folder_name = re.sub(r'[\\/*?:"<>|]', '_', folder_name) # Sanitize
         folder_path = os.path.join(working_directory, folder_name)
-
         if not os.path.exists(folder_path):
             os.makedirs(folder_path)
         elif not os.path.isdir(folder_path):
              logging.error(f"Cannot create folder, a file with the same name already exists: {folder_path}")
              if progress_callback:
                  progress_callback(f"Error {index+1}/{total_dates}: Cannot create folder {folder_name}")
-             return date_str, None, False
-
-
+             return date_str, None, False # Indicate failure but allow others to proceed
         moved_count = 0
         error_count = 0
         for time_str, filename in files_with_time:
             source_path = os.path.join(working_directory, filename)
             dest_path = os.path.join(folder_path, filename)
-
-            # Check if source file exists before moving
-            if not os.path.exists(source_path):
+            if not os.path.exists(source_path): # File might have been moved/deleted by another process
                 logging.warning(f"Source file not found, skipping move: {source_path}")
                 error_count += 1
-                continue # Skip this file
-
+                continue
             try:
                 shutil.move(source_path, dest_path)
                 moved_count += 1
             except Exception as e:
                 logging.error(f"Error moving file {filename} to {folder_path}: {e}")
                 error_count += 1
-
         if progress_callback:
             status_msg = f"Organized folder {index+1}/{total_dates}: {folder_name} ({moved_count} files)"
             if error_count > 0:
                 status_msg += f" ({error_count} errors)"
             progress_callback(status_msg)
         logging.info(f"Organized folder {folder_name}, moved {moved_count} files with {error_count} errors.")
-
-        # Consider it successful as long as the main process didn't throw an exception.
-        # Success doesn't necessarily mean all files were moved without error.
-        return date_str, folder_path, True
-
+        return date_str, folder_path, True # Return success and path for zipping
     except Exception as e:
-        import traceback
         logging.error(f"Error processing date group {date_str}: {e}\n{traceback.format_exc()}")
         if progress_callback:
             progress_callback(f"Error {index+1}/{total_dates}: Failed processing date group {date_str}")
-        return date_str, None, False
-
+        return date_str, None, False # Indicate failure
 # ----------------------------
 # Function to create a ZIP archive
 # ----------------------------
-
 def create_zip_archive(args):
-    """
-    Create a ZIP archive for a folder using 7-Zip.
-
-    Parameters:
-        args (tuple): (folder_name, folder_path, path_to_7zip, working_directory, progress_callback, index, total)
-
-    Returns:
-        tuple: (folder_name, success)
-    """
-    folder_name, folder_path, path_to_7zip, working_directory, progress_callback, index, total = args
-
+    folder_name, folder_path, path_to_7zip_exe, working_directory, progress_callback, index, total = args
     try:
-        # Ensure the source folder exists
         if not os.path.isdir(folder_path):
              logging.error(f"Source folder not found, cannot create ZIP: {folder_path}")
              if progress_callback:
                  progress_callback(f"Error {index+1}/{total}: Folder not found {folder_name}")
              return folder_name, False
-
-
         zip_name = f"{folder_name}.zip"
-        # Place the zip file in the working directory
-        zip_path = os.path.join(working_directory, zip_name)
-
-        # Build the 7-Zip command
-        # 'a' - add to archive
-        # '-tzip' - explicitly specify ZIP format
-        # '-mx=5' - set compression level (optional, 5 is normal)
-        # '-r' - recursively include subdirectories (harmless here, good practice)
+        zip_path = os.path.join(working_directory, zip_name) # Place zip in the parent (current_directory)
+        # Ensure 7-Zip is targeting the contents of the folder, not the folder itself as a top-level item in the zip
+        # Path to archive: zip_path
+        # Path to files/folders to add: folder_path\* (or similar, depending on 7-Zip's CWD)
+        # To zip contents of folder_path into zip_path: 7z a -tzip {zip_path} {folder_path}\*
+        # Or, more robustly, change CWD or use full paths for contents.
+        # Simpler: just archive the folder itself. Users can extract.
         zip_command = [
-            path_to_7zip,
-            "a",         # add to archive
-            "-tzip",     # create ZIP format
-            #"-mx=5",    # Optional: compression level (0=store, 9=max)
-            zip_path,    # output archive name
-            folder_path  # source folder path to compress
+            path_to_7zip_exe, "a", "-tzip", zip_path, os.path.join(folder_path, '*') # Add contents of folder
         ]
-
-        logging.info(f"Creating ZIP archive for '{folder_name}'...")
-        # Run 7-Zip command
-        # Add startupinfo to prevent console window popup on Windows
+        logging.info(f"Creating ZIP archive for '{folder_name}' using contents of '{folder_path}'...")
+        
         startupinfo = None
         if platform.system() == "Windows":
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             startupinfo.wShowWindow = subprocess.SW_HIDE
-
+        
         result = subprocess.run(
-            zip_command,
-            stdout=subprocess.PIPE, # Capture standard output
-            stderr=subprocess.PIPE, # Capture error output
-            text=True,              # Decode output as text
-            encoding='utf-8',       # Specify encoding
-            errors='ignore',        # Ignore decoding errors
-            check=False,            # Do not automatically check return code
-            startupinfo=startupinfo
+            zip_command, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+            text=True, encoding='utf-8', errors='ignore', check=False, startupinfo=startupinfo
         )
-
+        
         success = result.returncode == 0
-
         if progress_callback:
             if success:
                 progress_callback(f"Created ZIP {index+1}/{total}: {zip_name}")
                 logging.info(f"Successfully created ZIP archive: {zip_name}")
-                # Optional: Delete original folder after successful compression
-                # try:
-                #     shutil.rmtree(folder_path)
-                #     logging.info(f"Deleted original folder: {folder_path}")
-                # except Exception as rm_err:
-                #     logging.error(f"Error deleting folder {folder_path}: {rm_err}")
             else:
                 progress_callback(f"Failed to create ZIP {index+1}/{total}: {zip_name}")
                 logging.error(f"Failed to create ZIP archive '{zip_name}'. Return code: {result.returncode}")
-                logging.error(f"7-Zip stdout: {result.stdout}")
-                logging.error(f"7-Zip stderr: {result.stderr}")
-
+                logging.error(f"7-Zip stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
+                logging.error(f"7-Zip stderr: {result.stderr.strip() if result.stderr else 'N/A'}")
+        
         return folder_name, success
     except Exception as e:
-        import traceback
         logging.error(f"Unexpected error creating ZIP for {folder_name}: {e}\n{traceback.format_exc()}")
         if progress_callback:
              progress_callback(f"Error {index+1}/{total}: Failed creating ZIP {folder_name}")
         return folder_name, False
-
 # ----------------------------
-# PyQt5 Worker Classes (Mostly unchanged, updated signals/progress messages)
+# PyQt5 Worker Classes
 # ----------------------------
+class MergeWorker(QtCore.QObject): # Uses MoviePy
+    finished = QtCore.pyqtSignal(bool, str, list) # success, output_path, list_of_original_merged_files
+    progress = QtCore.pyqtSignal(str)
 
-class MergeWorker(QtCore.QObject):
-    """Worker object to run the merge process in a separate thread. Emits finished signal when done."""
-    finished = QtCore.pyqtSignal(bool, str, list)  # success, output_path, merged_files
-    progress = QtCore.pyqtSignal(str) # Progress message signal
-
-    def __init__(self, files, output_dir_path, parent=None):
+    def __init__(self, files, output_dir, parent=None):
         super().__init__(parent)
-        self.files = files
-        self.output_dir_path = output_dir_path # Use updated variable name
+        self.files = files # Expected to be list of basenames
+        self.output_dir_path = output_dir
 
     @QtCore.pyqtSlot()
     def run(self):
-        self.progress.emit("Starting file merge...")
+        self.progress.emit("Starting file merge (MoviePy)...")
+        # process_files expects a list of basenames, which self.files should be
         success, output_path = process_files(self.files, self.output_dir_path, self.progress.emit)
-        # Only return the list of merged files on success
+        # If successful, self.files contains the list of original basenames that were intended for merging.
+        # process_files returns the actual output_path. We need to confirm which files were *actually* merged.
+        # The current process_files doesn't directly return the list of successfully merged source files,
+        # but `valid_files_for_merge` within it holds that. We can pass `self.files` back for now,
+        # as the UI uses it to disable merged files. A more precise list could be returned by process_files.
+        # For now, assume all files in self.files were part of the merge if successful.
         self.finished.emit(success, output_path if output_path else "", self.files if success else [])
 
-
-class ConvertWorker(QtCore.QObject):
-    """Worker object to run MP4 to MP3 conversion in a separate thread. Emits finished signal when done."""
-    finished = QtCore.pyqtSignal(bool, int, int)  # success, successful_count, total_processed
+class ConvertWorker(QtCore.QObject): # Uses FFmpeg via convert_mp4_to_mp3
+    finished = QtCore.pyqtSignal(bool, int, int) # overall_success, successful_count, processed_count
     progress = QtCore.pyqtSignal(str)
+
+    # No __init__ needed if it just calls super and takes no args other than parent
 
     @QtCore.pyqtSlot()
     def run(self):
         self.progress.emit("Scanning for MP4 files...")
+        if not PATH_TO_FFMPEG or not os.path.isfile(PATH_TO_FFMPEG):
+            logging.error(f"FFmpeg not found at the configured path: {PATH_TO_FFMPEG}")
+            self.progress.emit(f"Error: FFmpeg not found at '{PATH_TO_FFMPEG}'. Cannot convert MP4 files. Please check config.json or place FFmpeg in the script directory.")
+            self.finished.emit(False, 0, 0) 
+            return
         try:
-            # Ensure we only list files, not directories
             mp4_files = [f for f in os.listdir(current_directory) if f.lower().endswith('.mp4') and os.path.isfile(os.path.join(current_directory, f))]
         except Exception as e:
             logging.error(f"Error scanning for MP4 files: {e}")
@@ -665,974 +530,934 @@ class ConvertWorker(QtCore.QObject):
         total_files = len(mp4_files)
         if not mp4_files:
             self.progress.emit("No MP4 files found.")
-            self.finished.emit(True, 0, 0) # Consider finding no files as a "successful" completion
+            self.finished.emit(True, 0, 0) # No files is a form of success (nothing to do)
             return
 
-        self.progress.emit(f"Found {total_files} MP4 files, starting conversion...")
+        self.progress.emit(f"Found {total_files} MP4 files, starting FFmpeg conversion...")
         successful_count = 0
-        processed_count = 0
-
+        processed_count = 0 # Tracks how many futures completed
+        
         try:
-            # Create arguments for parallel processing
             args_list = [(file, self.progress.emit, i, total_files) for i, file in enumerate(mp4_files)]
-
-            # Process files in parallel
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_file = {executor.submit(convert_mp4_to_mp3, args): args[0] for args in args_list}
-
                 for future in as_completed(future_to_file):
-                    processed_count += 1
+                    original_file_arg = future_to_file[future]
+                    processed_count +=1
                     try:
-                        success, file = future.result()
-                        if success:
+                        success_file, _ = future.result() # second item is filename, already have it
+                        if success_file:
                             successful_count += 1
                     except Exception as e:
-                         # future.result() might raise exceptions from the worker function
-                         file_arg = future_to_file[future]
-                         logging.error(f"Error processing future for file {file_arg}: {e}")
-                         # Update progress callback about the error
-                         self.progress.emit(f"Error processing file: {file_arg}")
-
-
-            final_message = f"Conversion complete. Successfully converted {successful_count}/{processed_count} files."
+                         logging.error(f"Error processing future for MP4 conversion of file {original_file_arg}: {e}\n{traceback.format_exc()}")
+                         self.progress.emit(f"Error during conversion task for: {original_file_arg}")
+            
+            final_message = f"FFmpeg conversion complete. Successfully converted {successful_count}/{processed_count} files."
+            # It's possible processed_count < total_files if ThreadPoolExecutor had issues submitting all tasks
+            # or if there were unhandled exceptions before future.result() for some tasks.
+            # as_completed guarantees we only iterate over completed futures.
             if processed_count < total_files:
-                 final_message += f" ({total_files - processed_count} task(s) did not complete or failed)."
+                 final_message += f" ({total_files - processed_count} initial task(s) may not have completed or were not processed)."
+            elif successful_count < processed_count:
+                 final_message += f" ({processed_count - successful_count} file(s) failed during conversion)."
+
             self.progress.emit(final_message)
-            # Consider successful if any files were converted or if no files needed processing
-            self.finished.emit(successful_count > 0 or processed_count == 0, successful_count, processed_count)
+            # Overall success if all processed tasks were successful, OR if no files were processed (e.g. no mp4s found initially)
+            # A single failure among processed tasks means overall_success is False from a strict "all or nothing" view,
+            # but True if "some work was done successfully or no work was needed".
+            # Let's define overall success as: (no files to process) OR (all processed files were successful).
+            # If processed_count is 0 but total_files > 0, it's a failure.
+            # If processed_count is 0 and total_files is 0, it's a success.
+            overall_task_success = (total_files == 0) or (processed_count > 0 and successful_count == processed_count)
+            if total_files > 0 and processed_count == 0 : # tasks were there but none processed
+                overall_task_success = False
+
+            self.finished.emit(overall_task_success, successful_count, processed_count)
+
         except Exception as e:
-            import traceback
-            logging.error(f"Error during MP4 to MP3 conversion process: {e}\n{traceback.format_exc()}")
-            self.progress.emit("An error occurred during conversion.")
+            logging.error(f"Error during MP4 to MP3 conversion process (FFmpeg): {e}\n{traceback.format_exc()}")
+            self.progress.emit("A critical error occurred during FFmpeg conversion process.")
             self.finished.emit(False, successful_count, processed_count)
 
 
-class RemoveSilenceWorker(QtCore.QObject):
-    """Worker object to remove silent parts from selected audio files using ffmpeg.exe."""
-    finished = QtCore.pyqtSignal(bool, int, int)  # success flag, successful_count, total_processed
+class RemoveSilenceWorker(QtCore.QObject): # Uses FFmpeg
+    finished = QtCore.pyqtSignal(bool, int, int) # overall_success, successful_count, total_processed
     progress = QtCore.pyqtSignal(str)
 
-    def __init__(self, files, parent=None):
+    def __init__(self, files, parent=None): # files are basenames
         super().__init__(parent)
         self.files = files
 
     @QtCore.pyqtSlot()
     def run(self):
-        self.progress.emit("Starting silence removal...")
-        ffmpeg_path = os.path.join(current_directory, "ffmpeg.exe")
-        if not os.path.isfile(ffmpeg_path):
-            logging.error("ffmpeg.exe not found in the current directory.")
-            self.progress.emit("Error: ffmpeg.exe not found.")
+        self.progress.emit("Starting silence removal (FFmpeg)...")
+        if not PATH_TO_FFMPEG or not os.path.isfile(PATH_TO_FFMPEG):
+            logging.error(f"ffmpeg not found at the configured path: {PATH_TO_FFMPEG}")
+            self.progress.emit(f"Error: ffmpeg not found at '{PATH_TO_FFMPEG}'. Please check config.json or place it in the script directory.")
             self.finished.emit(False, 0, 0)
             return
 
         total_files = len(self.files)
         if total_files == 0:
              self.progress.emit("No files selected for silence removal.")
-             self.finished.emit(True, 0, 0) # No files is a successful completion
+             self.finished.emit(True, 0, 0) # No files is a success (nothing to do)
              return
-
-        self.progress.emit(f"Processing {total_files} files to remove silence...")
+        
+        self.progress.emit(f"Processing {total_files} files to remove silence (FFmpeg)...")
         successful_count = 0
         processed_count = 0
-
         try:
-            # Create arguments for parallel processing
-            args_list = [(file, ffmpeg_path, self.progress.emit, i, total_files) for i, file in enumerate(self.files)]
-
-            # Process files in parallel
+            args_list = [(file, self.progress.emit, i, total_files) for i, file in enumerate(self.files)]
             with ThreadPoolExecutor(max_workers=MAX_WORKERS) as executor:
                 future_to_file = {executor.submit(remove_silence_from_file, args): args[0] for args in args_list}
-
                 for future in as_completed(future_to_file):
-                    processed_count += 1
+                    original_file_arg = future_to_file[future]
+                    processed_count +=1
                     try:
-                        success, file = future.result()
-                        if success:
+                        success_file, _ = future.result()
+                        if success_file:
                             successful_count += 1
                     except Exception as e:
-                         file_arg = future_to_file[future]
-                         logging.error(f"Error processing future for file {file_arg}: {e}")
-                         self.progress.emit(f"Error processing file: {file_arg}")
-
+                         logging.error(f"Error processing future for silence removal of file {original_file_arg}: {e}\n{traceback.format_exc()}")
+                         self.progress.emit(f"Error during silence removal task for: {original_file_arg}")
+            
             final_message = f"Silence removal complete. Successfully processed {successful_count}/{processed_count} files."
             if processed_count < total_files:
-                 final_message += f" ({total_files - processed_count} task(s) did not complete or failed)."
-
+                 final_message += f" ({total_files - processed_count} initial task(s) may not have completed or were not processed)."
+            elif successful_count < processed_count:
+                 final_message += f" ({processed_count - successful_count} file(s) failed during processing)."
+            
             self.progress.emit(final_message)
-            # Consider successful if any files were processed or if no files needed processing
-            self.finished.emit(successful_count > 0 or processed_count == 0, successful_count, processed_count)
+            overall_task_success = (total_files == 0) or (processed_count > 0 and successful_count == processed_count)
+            if total_files > 0 and processed_count == 0 : 
+                overall_task_success = False
+            self.finished.emit(overall_task_success, successful_count, processed_count)
+
         except Exception as e:
-            import traceback
-            logging.error(f"Error during silence removal process: {e}\n{traceback.format_exc()}")
-            self.progress.emit("An error occurred during silence removal.")
+            logging.error(f"Error during silence removal process (FFmpeg): {e}\n{traceback.format_exc()}")
+            self.progress.emit("A critical error occurred during silence removal process.")
             self.finished.emit(False, successful_count, processed_count)
 
 
-class OrganizeWorker(QtCore.QObject):
-    """Worker object to organize MP3 files by date, move them to folders, and create ZIP archives."""
-    finished = QtCore.pyqtSignal(bool, int, int)  # success flag, folder count, zip count
+class OrganizeWorker(QtCore.QObject): # Uses 7-Zip for zipping
+    finished = QtCore.pyqtSignal(bool, int, int) # overall_success, folder_count, zip_count
     progress = QtCore.pyqtSignal(str)
 
-    def __init__(self, path_to_7zip, parent=None):
+    def __init__(self, path_to_7zip_exe, parent=None):
         super().__init__(parent)
-        self.path_to_7zip = path_to_7zip # Store the potentially updated path
+        self.path_to_7zip_exe = path_to_7zip_exe # Can be empty if not found/specified
 
     @QtCore.pyqtSlot()
     def run(self):
         self.progress.emit("Starting MP3 file organization by date...")
-
-        # Check if 7-Zip exists
         can_zip = False
-        if self.path_to_7zip and os.path.isfile(self.path_to_7zip): # Check if path is valid
+        if self.path_to_7zip_exe and os.path.isfile(self.path_to_7zip_exe):
             can_zip = True
-            logging.info(f"7-Zip found: {self.path_to_7zip}")
+            logging.info(f"7-Zip found: {self.path_to_7zip_exe}. Zipping will be attempted.")
         else:
-            logging.warning("7-Zip executable not found at %s.", self.path_to_7zip if self.path_to_7zip else "<Not Specified>")
+            logging.warning(f"7-Zip executable not found or not specified (path: {self.path_to_7zip_exe if self.path_to_7zip_exe else '<Not Provided>'}). Files will be organized, but ZIP archives will not be created.")
             self.progress.emit("Warning: 7-Zip not found. Files will be organized without creating ZIP archives.")
-
-        working_directory = current_directory # Use global variable
-
-        # Get all mp3 files in the current directory, ensuring they are files
+        
+        working_directory = current_directory # Base directory for operations
         try:
-            all_files = os.listdir(working_directory)
-            mp3_files = [f for f in all_files if f.lower().endswith('.mp3') and os.path.isfile(os.path.join(working_directory, f))]
+            all_files_in_dir = os.listdir(working_directory)
+            mp3_files = [f for f in all_files_in_dir if f.lower().endswith('.mp3') and os.path.isfile(os.path.join(working_directory, f))]
         except Exception as e:
-            logging.error(f"Error scanning for MP3 files: {e}")
-            self.progress.emit("Error: Could not scan for MP3 files.")
+            logging.error(f"Error scanning for MP3 files in {working_directory}: {e}")
+            self.progress.emit(f"Error: Could not scan for MP3 files in {working_directory}.")
             self.finished.emit(False, 0, 0)
             return
 
-        # Create a dictionary to store files by date
         files_by_date = defaultdict(list)
-
-        # Extract date and time and organize files by date
-        for file in mp3_files:
-            date, time = parse_date_and_time_from_filename(file)
-            if date and time:
-                formatted_date = date.strftime('%Y%m%d')  # Format as YYYYMMDD
-                # Store ('HH-MM', filename)
-                files_by_date[formatted_date].append((time.strftime('%H-%M'), file))
-            # else:
-                # logging.debug(f"File '{file}' does not match date/time pattern, ignoring for organization.")
-
-
+        for file_basename in mp3_files:
+            date_obj, time_obj = parse_date_and_time_from_filename(file_basename)
+            if date_obj and time_obj: # Ensure both date and time are parsed
+                formatted_date_for_grouping = date_obj.strftime('%Y%m%d') # Key for grouping
+                time_str_for_sorting = time_obj.strftime('%H-%M') # For sorting within group and naming folder
+                files_by_date[formatted_date_for_grouping].append((time_str_for_sorting, file_basename))
+        
         if not files_by_date:
             self.progress.emit("No MP3 files with valid date/time found for organization.")
-            self.finished.emit(True, 0, 0) # No files is a successful completion
+            self.finished.emit(True, 0, 0) # Success, as there's nothing to do
             return
 
-        folder_count = 0
-        zip_count = 0
-        processed_folders_info = [] # Store {'name': folder_name, 'path': folder_path}
+        organized_folder_count = 0
+        successful_zip_count = 0
+        processed_folders_for_zipping = [] # List of {'name': folder_name, 'path': folder_path}
 
-        try:
-            # Process date groups in parallel (move files to folders)
-            total_dates = len(files_by_date)
-            self.progress.emit(f"Organizing {len(mp3_files)} files into {total_dates} date groups...")
+        total_date_groups = len(files_by_date)
+        self.progress.emit(f"Organizing {len(mp3_files)} MP3 files into {total_date_groups} date groups...")
+        
+        # --- Stage 1: Organize files into folders ---
+        organization_tasks_args = [
+            (date_str, files_list_with_time, working_directory, self.progress.emit, i, total_date_groups)
+            for i, (date_str, files_list_with_time) in enumerate(files_by_date.items())
+        ]
+        
+        organization_completed_successfully = True # Assume success unless a task fails critically
+        with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_date_groups if total_date_groups > 0 else 1)) as executor:
+            future_to_date_group = {
+                executor.submit(process_date_group, args): args[0] # args[0] is date_str
+                for args in organization_tasks_args
+            }
+            for future in as_completed(future_to_date_group):
+                date_group_key = future_to_date_group[future]
+                try:
+                    _, created_folder_path, success_flag = future.result()
+                    if success_flag and created_folder_path:
+                        organized_folder_count += 1
+                        folder_basename = os.path.basename(created_folder_path)
+                        processed_folders_for_zipping.append({'name': folder_basename, 'path': created_folder_path})
+                    elif not success_flag:
+                        # A specific group failed, log it. Overall process might still be "successful" if some work is done.
+                        logging.warning(f"Organization for date group {date_group_key} reported failure or no path.")
+                        # organization_completed_successfully = False # Uncomment if one failure means overall failure
+                except Exception as e:
+                    logging.error(f"Error processing future for organizing date group {date_group_key}: {e}\n{traceback.format_exc()}")
+                    organization_completed_successfully = False # Critical error in task execution
 
-            # Create arguments for parallel processing
-            args_list_organize = [
-                (date_str, files_with_time, working_directory, self.progress.emit, i, total_dates)
-                for i, (date_str, files_with_time) in enumerate(files_by_date.items())
+        self.progress.emit(f"File organization into folders complete. Created {organized_folder_count} folders.")
+
+        # --- Stage 2: Zip organized folders (if 7-Zip is available and folders were created) ---
+        if can_zip and processed_folders_for_zipping:
+            total_folders_to_zip = len(processed_folders_for_zipping)
+            self.progress.emit(f"Starting ZIP archive creation for {total_folders_to_zip} folders using 7-Zip...")
+            
+            zipping_tasks_args = [
+                (folder_info['name'], folder_info['path'], self.path_to_7zip_exe, working_directory, self.progress.emit, i, total_folders_to_zip)
+                for i, folder_info in enumerate(processed_folders_for_zipping)
             ]
+            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_folders_to_zip if total_folders_to_zip > 0 else 1)) as executor:
+                future_to_zip_task = {
+                    executor.submit(create_zip_archive, args): args[0] # args[0] is folder_name
+                    for args in zipping_tasks_args
+                }
+                for future in as_completed(future_to_zip_task):
+                    folder_name_key = future_to_zip_task[future]
+                    try:
+                        _, success_flag = future.result()
+                        if success_flag:
+                            successful_zip_count += 1
+                        # else: zipping_completed_successfully = False # Uncomment if one zip failure means overall zip failure
+                    except Exception as e:
+                        logging.error(f"Error processing future for zipping folder {folder_name_key}: {e}\n{traceback.format_exc()}")
+                        # zipping_completed_successfully = False # Critical error
 
-            # Use thread pool to process date groups
-            with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_dates)) as executor:
-                future_to_date = {executor.submit(process_date_group, args): args[0] for args in args_list_organize}
-
-                for future in as_completed(future_to_date):
-                     # No need to unpack date_str_result here unless used
-                     _, folder_path_result, success_result = future.result()
-                     if success_result and folder_path_result:
-                         folder_name = os.path.basename(folder_path_result)
-                         processed_folders_info.append({'name': folder_name, 'path': folder_path_result})
-                         folder_count += 1
-                     # else:
-                         # Log organizing failures if needed
-
-
-            self.progress.emit(f"File organization complete. Created {folder_count} folders.")
-
-            # Create ZIP archives in parallel if 7-Zip is available and folders were processed
-            if can_zip and processed_folders_info:
-                total_folders_to_zip = len(processed_folders_info)
-                self.progress.emit(f"Starting ZIP archive creation for {total_folders_to_zip} folders...")
-
-                # Create arguments for parallel ZIP creation
-                zip_args_list = [
-                    (info['name'], info['path'], self.path_to_7zip, working_directory, self.progress.emit, i, total_folders_to_zip)
-                    for i, info in enumerate(processed_folders_info)
-                ]
-
-                # Use thread pool to create ZIPs
-                with ThreadPoolExecutor(max_workers=min(MAX_WORKERS, total_folders_to_zip)) as executor:
-                    future_to_folder = {executor.submit(create_zip_archive, args): args[0] for args in zip_args_list}
-
-                    for future in as_completed(future_to_folder):
-                        # No need to unpack folder_name_result here
-                        _, success_zip = future.result()
-                        if success_zip:
-                            zip_count += 1
-                        # else:
-                            # Log ZIP creation failures if needed
-
-
-            final_org_message = f"Organization complete. Created {folder_count} folders."
-            if can_zip: # Report zip status only if attempted
-                 final_org_message += f" Successfully created {zip_count} ZIP archives."
-            else:
-                 final_org_message += " (ZIP creation skipped as 7-Zip was not found or specified)."
-
-            self.progress.emit(final_org_message)
-            # Consider successful if the main organization process didn't throw an error
-            self.finished.emit(True, folder_count, zip_count)
-
-        except Exception as e:
-            import traceback
-            logging.error(f"Error during organization process: {e}\n{traceback.format_exc()}")
-            self.progress.emit("A critical error occurred during organization.")
-            # Report failure even if some folders/zips were created before the error
-            self.finished.emit(False, folder_count, zip_count)
-
-
+        final_org_message = f"Organization process finished. Created {organized_folder_count} folders."
+        if can_zip:
+            if organized_folder_count > 0 :
+                 final_org_message += f" Successfully created {successful_zip_count} of {len(processed_folders_for_zipping)} possible ZIP archives."
+                 if successful_zip_count < len(processed_folders_for_zipping):
+                     final_org_message += " Some ZIP operations may have failed; check logs."
+            else: # No folders were created, so no zipping attempted.
+                 final_org_message += " No folders were created, so no ZIP archives were made."
+        else: # Zipping was not attempted
+             final_org_message += " (ZIP creation skipped as 7-Zip was not found, not specified, or no folders were created)."
+        
+        self.progress.emit(final_org_message)
+        # Define overall success: True if at least organization started and didn't critically fail,
+        # or if there were no files to organize.
+        # A more strict definition might require all steps for all items to succeed.
+        # For now, if organization_completed_successfully is true, we call it a success.
+        self.finished.emit(organization_completed_successfully, organized_folder_count, successful_zip_count)
 # ----------------------------
-# PyQt5 GUI Implementation (Modernized Look)
+# PyQt5 GUI Implementation
 # ----------------------------
-
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("Audio Toolbox (MP3 Merge, Convert, Silence Removal, Organize)") # Updated title
-        self.resize(900, 700) # Slightly larger window size
-        self.merged_files = set()  # Keep track of merged file names in this session
-        self.current_workers = 0 # Track number of active worker threads
+        self.setWindowTitle("Audio Toolbox (MP3 Merge, Convert, Silence Removal, Organize)")
+        self.resize(900, 700) # Adjusted default size
+        self.merged_files = set() # Stores basenames of files that are part of a merge output
+        self.current_workers = 0 # Counter for active QThreads/workers
+        self.active_threads_workers = [] # To keep QThread and worker alive
+
         self.initUI()
-        self.applyStyles() # Apply the new stylesheet
+        self.applyStyles()
         self.refreshFileList()
+
+        # Log paths at startup
+        effective_7zip = PATH_TO_7ZIP if PATH_TO_7ZIP and os.path.isfile(PATH_TO_7ZIP) else 'Not configured or found'
+        logging.info(f"Initial 7-Zip path from config/default: {effective_7zip}")
+        effective_ffmpeg = PATH_TO_FFMPEG if PATH_TO_FFMPEG and os.path.isfile(PATH_TO_FFMPEG) else 'Not configured or found'
+        logging.info(f"Initial FFmpeg path from config/default: {effective_ffmpeg}")
+
 
     def initUI(self):
         centralWidget = QtWidgets.QWidget()
         self.setCentralWidget(centralWidget)
         mainLayout = QtWidgets.QVBoxLayout(centralWidget)
-        mainLayout.setSpacing(15) # Increased main layout spacing
-        mainLayout.setContentsMargins(15, 15, 15, 15) # Added margins
+        mainLayout.setSpacing(15) # Increased spacing
+        mainLayout.setContentsMargins(15, 15, 15, 15) # Increased margins
 
-        # --- Title ---
+        # Title
         titleLabel = QtWidgets.QLabel("Audio Toolbox")
         titleFont = titleLabel.font()
         titleFont.setPointSize(24)
         titleFont.setBold(True)
         titleLabel.setFont(titleFont)
         titleLabel.setAlignment(QtCore.Qt.AlignCenter)
-        titleLabel.setStyleSheet("color: #2c3e50; margin-bottom: 10px;") # Set title color and bottom margin
+        titleLabel.setStyleSheet("color: #2c3e50; margin-bottom: 10px;")
         mainLayout.addWidget(titleLabel)
 
-        # --- File List Tree ---
+        # File Tree
         self.treeWidget = QtWidgets.QTreeWidget()
-        self.treeWidget.setHeaderLabels(["Date / File Name"]) # Updated header
-        self.treeWidget.setAlternatingRowColors(True) # Alternating row colors
+        self.treeWidget.setHeaderLabels(["Date / File Name"])
+        self.treeWidget.setAlternatingRowColors(True)
         self.treeWidget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection) # Allow multi-select
-        # Allow tree widget to expand vertically
-        mainLayout.addWidget(self.treeWidget, 1) # The '1' makes it stretch
+        # self.treeWidget.setSortingEnabled(True) # Consider if user sorting is desired vs programmatic
+        mainLayout.addWidget(self.treeWidget, 1) # Give tree more space
 
-        # --- Button Groups ---
-        bottomLayout = QtWidgets.QHBoxLayout() # Horizontal layout for button groups and settings
+        # Bottom layout for controls
+        bottomLayout = QtWidgets.QHBoxLayout()
 
-        # -- Actions Group --
+        # Actions Group
         actionsGroup = QtWidgets.QGroupBox("File Operations")
         actionsLayout = QtWidgets.QVBoxLayout(actionsGroup)
         actionsLayout.setSpacing(10)
 
-        # Standard icons (try to get them, don't set icon if failed)
-        icon_merge = QtGui.QIcon.fromTheme("media-skip-forward", QtGui.QIcon.fromTheme("go-jump")) # Try theme icons
-        icon_merge_date = QtGui.QIcon.fromTheme("document-save-as", QtGui.QIcon.fromTheme("document-save"))
-        icon_convert = QtGui.QIcon.fromTheme("utilities-terminal", QtGui.QIcon.fromTheme("applications-utilities"))
-        icon_silence = QtGui.QIcon.fromTheme("audio-volume-muted", QtGui.QIcon.fromTheme("player-volume-muted"))
-        icon_organize = QtGui.QIcon.fromTheme("folder-zip", QtGui.QIcon.fromTheme("package-x-generic"))
-        icon_refresh = QtGui.QIcon.fromTheme("view-refresh", QtGui.QIcon.fromTheme("reload"))
+        # Icons (using standard names, will fall back if not found by theme)
+        icon_merge = QtGui.QIcon.fromTheme("media-join", QtGui.QIcon.fromTheme("list-add"))
+        icon_merge_date = QtGui.QIcon.fromTheme("media-playlist-shuffle", QtGui.QIcon.fromTheme("view-sort-ascending"))
+        icon_convert = QtGui.QIcon.fromTheme("utilities-x-terminal", QtGui.QIcon.fromTheme("applications-accessories")) # More generic
+        icon_silence = QtGui.QIcon.fromTheme("audio-volume-muted", QtGui.QIcon.fromTheme("multimedia-volume-control"))
+        icon_organize = QtGui.QIcon.fromTheme("folder-zip", QtGui.QIcon.fromTheme("document-export"))
 
 
-        self.mergeButton = QtWidgets.QPushButton("Merge Selected")
+        self.mergeButton = QtWidgets.QPushButton("Merge Selected MP3s")
         if not icon_merge.isNull(): self.mergeButton.setIcon(icon_merge)
-        self.mergeButton.setToolTip("Merge all checked files (can span across dates)") # Add tooltip
+        self.mergeButton.setToolTip("Merge all checked MP3 files (can span across dates) using MoviePy.\nOutput filename based on the earliest file.")
         self.mergeButton.clicked.connect(self.mergeSelectedFiles)
         actionsLayout.addWidget(self.mergeButton)
 
-        self.mergeAllButton = QtWidgets.QPushButton("Merge All for Date")
+        self.mergeAllButton = QtWidgets.QPushButton("Merge All MP3s for Date")
         if not icon_merge_date.isNull(): self.mergeAllButton.setIcon(icon_merge_date)
-        self.mergeAllButton.setToolTip("Merge all unmerged files under the selected date")
+        self.mergeAllButton.setToolTip("Merge all unmerged MP3 files under the selected date group using MoviePy.\nOutput filename based on the earliest file in that group.")
         self.mergeAllButton.clicked.connect(self.mergeAllForSelectedDate)
         actionsLayout.addWidget(self.mergeAllButton)
-
-        self.convertButton = QtWidgets.QPushButton("Convert MP4 to MP3")
+        
+        self.convertButton = QtWidgets.QPushButton("Convert All MP4 to MP3")
         if not icon_convert.isNull(): self.convertButton.setIcon(icon_convert)
-        self.convertButton.setToolTip("Convert all MP4 files in the current directory to MP3")
+        self.convertButton.setToolTip("Convert all MP4 files in the current directory to MP3 using FFmpeg.")
         self.convertButton.clicked.connect(self.convertMp4Files)
         actionsLayout.addWidget(self.convertButton)
 
-        self.removeSilenceButton = QtWidgets.QPushButton("Remove Silence")
+        self.removeSilenceButton = QtWidgets.QPushButton("Remove Silence from Selected")
         if not icon_silence.isNull(): self.removeSilenceButton.setIcon(icon_silence)
-        self.removeSilenceButton.setToolTip("Remove silent segments from checked files using ffmpeg")
+        self.removeSilenceButton.setToolTip("Remove silent segments from checked audio files using FFmpeg.\nOutputs new files with '_nosilence' suffix.")
         self.removeSilenceButton.clicked.connect(self.removeSilenceSelectedFiles)
         actionsLayout.addWidget(self.removeSilenceButton)
 
-        self.organizeButton = QtWidgets.QPushButton("Organize & Zip")
+        self.organizeButton = QtWidgets.QPushButton("Organize All MP3s & Zip")
         if not icon_organize.isNull(): self.organizeButton.setIcon(icon_organize)
-        self.organizeButton.setToolTip("Organize all MP3s into date folders and create ZIPs (requires 7-Zip)")
+        self.organizeButton.setToolTip("Organize all MP3s in the current directory into date-based folders,\nthen create ZIP archives for each folder (requires 7-Zip).")
         self.organizeButton.clicked.connect(self.organizeFiles)
         actionsLayout.addWidget(self.organizeButton)
-
+        
         bottomLayout.addWidget(actionsGroup)
 
-        # -- Selection & Refresh Group --
-        selectionGroup = QtWidgets.QGroupBox("Selection & Refresh")
+        # Selection & Refresh Group
+        selectionGroup = QtWidgets.QGroupBox("Selection & View")
         selectionLayout = QtWidgets.QVBoxLayout(selectionGroup)
         selectionLayout.setSpacing(10)
 
         icon_select_all = QtGui.QIcon.fromTheme("edit-select-all")
         icon_deselect_all = QtGui.QIcon.fromTheme("edit-clear", QtGui.QIcon.fromTheme("edit-select-none"))
+        icon_refresh = QtGui.QIcon.fromTheme("view-refresh", QtGui.QIcon.fromTheme("reload"))
 
-        self.selectAllButton = QtWidgets.QPushButton("Select All")
+        self.selectAllButton = QtWidgets.QPushButton("Select All Enabled")
         if not icon_select_all.isNull(): self.selectAllButton.setIcon(icon_select_all)
-        self.selectAllButton.setToolTip("Check all enabled files")
+        self.selectAllButton.setToolTip("Check all enabled (not already merged) files in the list.")
         self.selectAllButton.clicked.connect(self.selectAllFiles)
         selectionLayout.addWidget(self.selectAllButton)
 
         self.deselectAllButton = QtWidgets.QPushButton("Deselect All")
         if not icon_deselect_all.isNull(): self.deselectAllButton.setIcon(icon_deselect_all)
-        self.deselectAllButton.setToolTip("Uncheck all files")
+        self.deselectAllButton.setToolTip("Uncheck all files in the list.")
         self.deselectAllButton.clicked.connect(self.deselectAllFiles)
         selectionLayout.addWidget(self.deselectAllButton)
-
-        self.refreshButton = QtWidgets.QPushButton("Refresh List")
+        
+        self.refreshButton = QtWidgets.QPushButton("Refresh File List")
         if not icon_refresh.isNull(): self.refreshButton.setIcon(icon_refresh)
-        self.refreshButton.setToolTip("Rescan the current directory for files")
+        self.refreshButton.setToolTip("Rescan the current directory and update the file list.")
         self.refreshButton.clicked.connect(self.refreshFileList)
         selectionLayout.addWidget(self.refreshButton)
-
-        selectionLayout.addStretch() # Push buttons to the top
+        selectionLayout.addStretch() # Pushes buttons to top
         bottomLayout.addWidget(selectionGroup)
 
+        # Settings & Status (Combined in a QVBoxLayout for better arrangement)
+        settingsAndStatusLayout = QtWidgets.QVBoxLayout()
 
-        # -- Settings Group (in a vertical layout to the right) --
-        settingsAndStatusLayout = QtWidgets.QVBoxLayout() # Vertical layout for settings and status
-
+        # Settings Group (within the QVBoxLayout)
         settingsGroup = QtWidgets.QGroupBox("Settings")
-        settingsLayout = QtWidgets.QFormLayout(settingsGroup) # Use QFormLayout for label-widget alignment
+        settingsLayout = QtWidgets.QFormLayout(settingsGroup) # QFormLayout is good for label-field pairs
         settingsLayout.setSpacing(10)
 
         self.threadCountSpinner = QtWidgets.QSpinBox()
         self.threadCountSpinner.setMinimum(1)
-        # Increase max limit, useful for I/O bound tasks
-        self.threadCountSpinner.setMaximum(max(64, (os.cpu_count() or 1) * 4))
+        # Allow more threads, up to a higher cap, default based on CPU but user can override
+        self.threadCountSpinner.setMaximum(max(64, (os.cpu_count() or 1) * 4)) 
         self.threadCountSpinner.setValue(MAX_WORKERS)
-        self.threadCountSpinner.setToolTip("Set the maximum number of parallel processing tasks")
+        self.threadCountSpinner.setToolTip("Set the maximum number of parallel processing tasks (threads).")
         self.threadCountSpinner.valueChanged.connect(self.updateThreadCount)
         settingsLayout.addRow("Max Parallel Tasks:", self.threadCountSpinner)
 
-        cpu_cores = os.cpu_count() or 'N/A' # Get CPU core count
+        cpu_cores = os.cpu_count() or 'N/A'
         cpuLabel = QtWidgets.QLabel(f"{cpu_cores}")
-        settingsLayout.addRow("CPU Cores:", cpuLabel)
-
+        settingsLayout.addRow("Detected CPU Cores:", cpuLabel)
+        
         settingsAndStatusLayout.addWidget(settingsGroup)
-        settingsAndStatusLayout.addStretch() # Push settings group to the top
+        settingsAndStatusLayout.addStretch() # Pushes settings group to top if status is below
+        bottomLayout.addLayout(settingsAndStatusLayout) # Add this vertical layout to the horizontal bottomLayout
 
-        # Add settings and status layout to the right side
-        bottomLayout.addLayout(settingsAndStatusLayout)
-
-        # Add the horizontal layout containing button groups and settings to the main layout
         mainLayout.addLayout(bottomLayout)
 
-        # --- Progress Bar and Status Label ---
+        # Progress Bar
         self.progressBar = QtWidgets.QProgressBar()
-        self.progressBar.setVisible(False)
-        self.progressBar.setTextVisible(False) # Hide percentage text for a cleaner look
+        self.progressBar.setVisible(False) # Initially hidden
+        self.progressBar.setTextVisible(False) # Cleaner look, statusLabel provides text
+        self.progressBar.setRange(0,0) # Indeterminate initially
         mainLayout.addWidget(self.progressBar)
 
-        self.statusLabel = QtWidgets.QLabel("Ready") # Initial status
+        # Status Label
+        self.statusLabel = QtWidgets.QLabel("Ready")
         self.statusLabel.setAlignment(QtCore.Qt.AlignCenter)
         mainLayout.addWidget(self.statusLabel)
 
-
     def applyStyles(self):
-        """Apply the modernized QSS stylesheet"""
-        # Style Sheet using a modern, clean look
+        # Modern, cleaner stylesheet
         style = """
         QWidget {
-            /* Preferred fonts with fallbacks */
             font-family: "Segoe UI", "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
-            font-size: 10pt; /* Slightly larger base font size */
-            background-color: #f8f9fa; /* Light background */
-            color: #343a40; /* Darker text color */
+            font-size: 10pt; /* Base font size */
+            background-color: #f8f9fa; /* Light gray background */
+            color: #343a40; /* Dark gray text */
         }
         QMainWindow {
             background-color: #f8f9fa;
         }
         QGroupBox {
             font-weight: bold;
-            border: 1px solid #dee2e6; /* Light gray border */
+            border: 1px solid #dee2e6; /* Lighter border */
             border-radius: 8px; /* Rounded corners */
-            margin-top: 10px; /* Space above the group box title */
-            background-color: #ffffff; /* White background for group content */
-            padding: 15px 10px 10px 10px; /* Padding inside (top adjusted for title) */
+            margin-top: 10px; /* Space above groupbox */
+            background-color: #ffffff; /* White background for groupbox content */
+            padding: 15px 10px 10px 10px; /* More padding inside */
         }
         QGroupBox::title {
             subcontrol-origin: margin;
-            subcontrol-position: top left; /* Position title at the top left */
-            padding: 0 5px 5px 5px; /* Padding around the title */
-            color: #0056b3; /* Blue title color */
+            subcontrol-position: top left;
+            padding: 0 5px 5px 5px; /* Padding around title */
+            color: #0056b3; /* Darker blue for title */
             left: 10px; /* Indent title slightly */
-            /* background-color: #f8f9fa; */ /* Optional: Match window background */
         }
         QPushButton {
-            /* Blue gradient */
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #007bff, stop:1 #0056b3);
+            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #007bff, stop:1 #0056b3); /* Blue gradient */
             color: white;
-            border: none;
+            border: none; /* No border for a flatter look */
             padding: 8px 15px; /* Comfortable padding */
             border-radius: 5px; /* Rounded corners */
-            min-height: 25px; /* Ensure minimum height */
-            outline: none; /* Remove focus outline */
-            font-weight: bold; /* Make button text bold */
+            min-height: 25px; /* Minimum height */
+            outline: none; /* No focus outline */
+            font-weight: bold;
         }
         QPushButton:hover {
-            /* Darker blue on hover */
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0069d9, stop:1 #004fa3);
+            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0069d9, stop:1 #004fa3); /* Darker blue on hover */
         }
         QPushButton:pressed {
-            /* Even darker blue when pressed */
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #005cbf, stop:1 #004085);
+            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #005cbf, stop:1 #004085); /* Even darker on press */
         }
         QPushButton:disabled {
-            background-color: #ced4da; /* Gray background when disabled */
-            color: #6c757d; /* Darker gray text */
+            background-color: #ced4da; /* Gray when disabled */
+            color: #6c757d; /* Darker gray text when disabled */
         }
         QTreeWidget {
             background-color: #ffffff; /* White background */
-            border: 1px solid #ced4da; /* Light gray border */
+            border: 1px solid #ced4da; /* Standard border */
             border-radius: 5px;
-            alternate-background-color: #e9ecef; /* Subtle alternating row color */
-            font-size: 9pt; /* Slightly smaller font for file list */
+            alternate-background-color: #e9ecef; /* Very light gray for alternating rows */
+            font-size: 9pt; /* Slightly smaller font for list items */
         }
         QTreeWidget::item {
-            padding: 6px 4px; /* Item padding */
+            padding: 6px 4px; /* Padding within items */
             border-radius: 3px; /* Slight rounding for selection highlight */
         }
-        /* Style for selected items */
         QTreeWidget::item:selected:active {
-            background-color: #007bff; /* Blue selection background */
-            color: white; /* White text for selected item */
+            background-color: #007bff; /* Blue selection color */
+            color: white;
         }
-        QTreeWidget::item:selected:!active { /* When widget doesn't have focus */
-             background-color: #d4e8ff;
-             color: #343a40;
+        QTreeWidget::item:selected:!active { /* When window is not focused */
+            background-color: #d4e8ff; /* Lighter blue */
+            color: #343a40; /* Original text color */
         }
-         /* Style for disabled (e.g., merged) items */
-         QTreeWidget::item:disabled {
-             color: #adb5bd; /* Gray text for disabled items */
-             background-color: transparent; /* Ensure no background overrides selection */
-         }
+        QTreeWidget::item:disabled {
+            color: #adb5bd; /* Light gray for disabled text */
+            background-color: transparent; /* Ensure no odd background */
+        }
         QHeaderView::section {
-            background-color: #e9ecef; /* Light gray header background */
+            background-color: #e9ecef; /* Light gray header */
             padding: 4px;
-            border: none; /* No header border */
-            border-bottom: 1px solid #ced4da; /* Bottom border for separation */
+            border: none;
+            border-bottom: 1px solid #ced4da; /* Separator line */
             font-weight: bold;
-            color: #495057; /* Dark gray header text */
+            color: #495057; /* Darker gray header text */
         }
         QProgressBar {
-            border: 1px solid #ced4da; /* Light gray border */
+            border: 1px solid #ced4da;
             border-radius: 5px;
             text-align: center;
-            background-color: #e9ecef; /* Light background */
-            height: 12px; /* Slim progress bar */
+            background-color: #e9ecef; /* Light gray background */
+            height: 12px; /* Slimmer progress bar */
         }
         QProgressBar::chunk {
             background-color: #28a745; /* Green progress chunk */
-            border-radius: 5px;
+            border-radius: 5px; /* Rounded chunk to match PBar */
         }
-        /* Style for indeterminate (busy) progress bar */
-        QProgressBar:indeterminate {
+        QProgressBar:indeterminate { /* For indeterminate state */
             background-color: #e9ecef;
         }
-        QProgressBar:indeterminate::chunk {
-            /* Animated gradient chunk */
+        QProgressBar:indeterminate::chunk { /* Animated indeterminate chunk */
              background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0, stop:0 #007bff, stop: 0.5 #e9ecef, stop:1 #007bff);
-            /* width: 20px; */ /* Width of the moving chunk - might need animation */
         }
-        QLabel#StatusLabel { /* Specific style for status label using objectName */
-            color: #6c757d; /* Gray status text */
+        QLabel#StatusLabel { /* Specific styling for status label if needed */
+            color: #6c757d; /* Medium gray */
             font-size: 9pt;
-            font-weight: bold; /* Make status slightly bolder */
+            font-weight: bold;
         }
         QSpinBox {
             padding: 4px 6px;
-            border: 1px solid #ced4da; /* Match other borders */
+            border: 1px solid #ced4da;
             border-radius: 4px;
-            min-width: 60px; /* Ensure spinner is wide enough */
+            min-width: 60px; /* Ensure it's wide enough */
         }
         QSpinBox:disabled {
-             background-color: #e9ecef; /* Disabled background */
-             color: #6c757d; /* Disabled text color */
+            background-color: #e9ecef;
+            color: #6c757d;
         }
-        QToolTip { /* Style tooltips */
-             background-color: #343a40; /* Dark background */
-             color: white; /* White text */
-             border: 1px solid #343a40;
+        QToolTip {
+             background-color: #343a40; /* Dark tooltip */
+             color: white;
+             border: 1px solid #343a40; /* Same color border or none */
              padding: 5px;
              border-radius: 4px;
-             opacity: 230; /* Slightly transparent */
+             opacity: 230; /* Slightly transparent (if supported by style engine) */
         }
         """
         self.setStyleSheet(style)
-        # Set object name for specific styling if needed
-        self.statusLabel.setObjectName("StatusLabel")
-
+        self.statusLabel.setObjectName("StatusLabel") # For specific QLabel styling if needed
 
     def updateThreadCount(self, value):
-        """Update the MAX_WORKERS global variable when the spinner changes."""
         global MAX_WORKERS
         MAX_WORKERS = value
         logging.info(f"Maximum worker threads set to: {MAX_WORKERS}")
+        self.updateStatus(f"Max parallel tasks set to {MAX_WORKERS}.")
 
     def selectAllFiles(self):
-        """Check all enabled file items in the tree."""
         root = self.treeWidget.invisibleRootItem()
         count = 0
-        for i in range(root.childCount()):
+        for i in range(root.childCount()): # Iterate through date items
             dateItem = root.child(i)
-            for j in range(dateItem.childCount()):
+            for j in range(dateItem.childCount()): # Iterate through file items under this date
                 childItem = dateItem.child(j)
-                # Check if item is enabled and checkable
-                if childItem.flags() & QtCore.Qt.ItemIsEnabled and childItem.flags() & QtCore.Qt.ItemIsUserCheckable:
+                # Check if item is enabled (not disabled) and checkable
+                if childItem.flags() & QtCore.Qt.ItemIsEnabled and \
+                   childItem.flags() & QtCore.Qt.ItemIsUserCheckable:
                     childItem.setCheckState(0, QtCore.Qt.Checked)
                     count += 1
-        self.updateStatus(f"Selected {count} files.")
-
+        self.updateStatus(f"Selected {count} enabled files.")
 
     def deselectAllFiles(self):
-        """Uncheck all checkable file items in the tree."""
         root = self.treeWidget.invisibleRootItem()
         count = 0
-        for i in range(root.childCount()):
+        for i in range(root.childCount()): # Iterate through date items
             dateItem = root.child(i)
-            for j in range(dateItem.childCount()):
+            for j in range(dateItem.childCount()): # Iterate through file items
                 childItem = dateItem.child(j)
-                if childItem.flags() & QtCore.Qt.ItemIsUserCheckable: # Check if it's checkable
+                if childItem.flags() & QtCore.Qt.ItemIsUserCheckable:
                      if childItem.checkState(0) == QtCore.Qt.Checked:
-                         count += 1
+                         count +=1
                      childItem.setCheckState(0, QtCore.Qt.Unchecked)
         self.updateStatus(f"Deselected {count} files.")
 
-
     def refreshFileList(self):
-        """
-        Scan the current directory for MP3 files, group them by date, and update the tree view.
-        """
         self.treeWidget.clear()
-        grouped_files = defaultdict(list)
+        grouped_files = defaultdict(list) # date_obj: [(basename, timestamp_obj)]
+        
         try:
             all_files_in_dir = os.listdir(current_directory)
-            # Filter for .mp3 files that are actually files (not directories)
-            mp3_files = [f for f in all_files_in_dir if f.lower().endswith('.mp3') and os.path.isfile(os.path.join(current_directory, f))]
+            # Filter for MP3 files directly and ensure they are files
+            mp3_file_basenames = [f for f in all_files_in_dir if f.lower().endswith('.mp3') and os.path.isfile(os.path.join(current_directory, f))]
         except Exception as e:
-            logging.error(f"Error scanning directory: {e}")
-            QtWidgets.QMessageBox.critical(self, "Error", f"Could not scan directory for files:\n{e}")
+            logging.error(f"Error scanning directory '{current_directory}': {e}")
+            QtWidgets.QMessageBox.critical(self, "Directory Scan Error", f"Could not scan directory for files:\n{e}")
             return
 
-        for f in mp3_files:
-            date, time = parse_date_and_time_from_filename(f)
-            if date:
-                 # Store (filename, datetime object for sorting)
-                 timestamp = datetime.combine(date, time) if time else datetime.combine(date, datetime.min.time())
-                 grouped_files[date].append((f, timestamp))
-            # else: # File doesn't match pattern, ignore
-                # logging.debug(f"File '{f}' ignored (doesn't match date/time pattern).")
+        for basename in mp3_file_basenames:
+            date_obj, time_obj = parse_date_and_time_from_filename(basename)
+            if date_obj: # Ensure date was parsed
+                 # If time_obj is None (e.g. only date in filename), use midnight for sorting
+                 timestamp = datetime.combine(date_obj, time_obj if time_obj else datetime.min.time())
+                 grouped_files[date_obj].append((basename, timestamp))
+            # else:
+            #    logging.debug(f"File '{basename}' does not match date/time pattern, not listed for merging/organization.")
 
-
-        # Add items to the tree widget (dates as top-level items)
         root = self.treeWidget.invisibleRootItem()
-        file_count = 0
-        for date in sorted(grouped_files.keys()):
-            date_str = date.strftime('%Y-%m-%d')
-            dateItem = QtWidgets.QTreeWidgetItem([date_str])
-            # Make top-level item non-selectable but checkable (for selecting all children)
-            dateItem.setFlags(dateItem.flags() & ~QtCore.Qt.ItemIsSelectable | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsAutoTristate)
+        total_file_count = 0
+        
+        # Sort date groups by date_obj for consistent display
+        for date_obj_key in sorted(grouped_files.keys()):
+            date_str_display = date_obj_key.strftime('%Y-%m-%d (%A)') # e.g., 2023-10-26 (Thursday)
+            dateItem = QtWidgets.QTreeWidgetItem([date_str_display])
+            # Make date items checkable to select all children, autoTristate for partial checks
+            dateItem.setFlags(dateItem.flags() | QtCore.Qt.ItemIsUserCheckable | QtCore.Qt.ItemIsAutoTristate)
             dateItem.setCheckState(0, QtCore.Qt.Unchecked)
-
-            # Make date font bold
+            
             font = dateItem.font(0)
             font.setBold(True)
             dateItem.setFont(0, font)
-
-            # Add to the tree root
             root.addChild(dateItem)
 
-            # Sort files by timestamp and add as child items with checkboxes
-            files_sorted = sorted(grouped_files[date], key=lambda item: item[1]) # Sort by datetime object
-            for filename, timestamp in files_sorted:
-                file_count += 1
-                childItem = QtWidgets.QTreeWidgetItem([filename])
+            # Sort files under this date group by their full timestamp
+            files_sorted_by_time = sorted(grouped_files[date_obj_key], key=lambda item: item[1])
+            
+            for basename, timestamp in files_sorted_by_time:
+                total_file_count += 1
+                # Display filename, perhaps with time for clarity if desired, but basename is usually enough
+                childItem = QtWidgets.QTreeWidgetItem([basename])
                 childItem.setFlags(childItem.flags() | QtCore.Qt.ItemIsUserCheckable)
-
-                if filename in self.merged_files:
-                    childItem.setCheckState(0, QtCore.Qt.Checked) # Show merged files as checked
-                    childItem.setDisabled(True) # Disable merged files
-                    # Optional: Change appearance of merged files (handled by QSS :disabled state)
-                    # childItem.setForeground(0, QtGui.QColor('gray'))
+                
+                if basename in self.merged_files: # Check if this basename was part of a successful merge
+                    childItem.setCheckState(0, QtCore.Qt.Checked) # Visually indicate it's "done"
+                    childItem.setDisabled(True) # Disable it from being re-selected for merge
+                    # Optional: change color for disabled/merged items
+                    # brush = QtGui.QBrush(QtGui.QColor("gray"))
+                    # childItem.setForeground(0, brush)
                 else:
                     childItem.setCheckState(0, QtCore.Qt.Unchecked)
-
-                # Store the file's date and optionally full path in the item for later use
-                childItem.setData(0, QtCore.Qt.UserRole, date)
-                # childItem.setData(0, QtCore.Qt.UserRole + 1, os.path.join(current_directory, filename)) # Store full path if needed
-
+                
+                childItem.setData(0, QtCore.Qt.UserRole, basename) # Store basename for easy retrieval
                 dateItem.addChild(childItem)
-            dateItem.setExpanded(True) # Expand date items by default
+            dateItem.setExpanded(True) # Expand date groups by default
 
-        self.treeWidget.resizeColumnToContents(0) # Adjust column width to fit content
-        self.updateStatus(f"Ready. Found {file_count} MP3 files.")
-
+        self.treeWidget.resizeColumnToContents(0)
+        self.updateStatus(f"Ready. Found {total_file_count} MP3 files in '{current_directory}'.")
 
     def getSelectedFiles(self):
         """
-        Returns a flat list of selected (checked) file names that are not disabled.
-        Also includes files under a checked date item.
+        Collects basenames of all checked and enabled files from the QTreeWidget.
+        Handles checking parent (date) items to include all their enabled children.
+        Returns a list of unique basenames, sorted chronologically.
         """
-        selected_files_list = []
-        processed_files = set() # Avoid duplicates if date and file are checked
-
+        selected_basenames = set() # Use a set to ensure uniqueness initially
         root = self.treeWidget.invisibleRootItem()
-        iterator = QtWidgets.QTreeWidgetItemIterator(self.treeWidget) # Iterate all items
+        
+        for i in range(root.childCount()): # Iterate through date items
+            dateItem = root.child(i)
+            # If dateItem itself is checked, all its enabled children are considered selected
+            # If dateItem is partially checked (Qt.PartiallyChecked), implies individual children are selected
+            # If dateItem is unchecked, still need to check its children individually.
 
-        while iterator.value():
-            item = iterator.value()
-            # Process checked file items first
-            if item.checkState(0) == QtCore.Qt.Checked:
-                parent = item.parent()
-                # Is it a file item (has a parent which is not the root)?
-                if parent and parent is not root:
-                    # Is it enabled?
-                    if not item.isDisabled():
-                        filename = item.text(0)
-                        if filename not in processed_files:
-                            selected_files_list.append(filename)
-                            processed_files.add(filename)
-                # Is it a date item (parent is root)?
-                elif parent is root:
-                     # Add all enabled children of the checked date item
-                     for j in range(item.childCount()):
-                          child = item.child(j)
-                          if not child.isDisabled(): # Only add enabled files
-                               filename = child.text(0)
-                               if filename not in processed_files:
-                                    selected_files_list.append(filename)
-                                    processed_files.add(filename)
-            iterator += 1
+            is_date_item_fully_checked = (dateItem.checkState(0) == QtCore.Qt.Checked)
 
-        # Sort the final list based on the parseable time from filename for consistency
-        selected_files_list.sort(key=parse_time_from_filename)
-
-        return selected_files_list
-
+            for j in range(dateItem.childCount()): # Iterate through file items (children of dateItem)
+                fileItem = dateItem.child(j)
+                if not fileItem.isDisabled(): # Only consider enabled files
+                    # If parent is fully checked, add child. OR if child itself is checked.
+                    if is_date_item_fully_checked or (fileItem.checkState(0) == QtCore.Qt.Checked):
+                        basename = fileItem.data(0, QtCore.Qt.UserRole) # Get basename from UserRole
+                        if basename:
+                            selected_basenames.add(basename)
+        
+        # Convert set to list and sort chronologically
+        sorted_selected_files = sorted(list(selected_basenames), key=lambda bn: parse_time_from_filename(bn))
+        return sorted_selected_files
 
     def mergeSelectedFiles(self):
-        """
-        Merge all checked (and enabled) files. Allows selecting files across different dates.
-        """
-        selected_files_list = self.getSelectedFiles() # Get flat list of checked, enabled files
-
+        selected_files_list = self.getSelectedFiles() # Gets sorted list of basenames
         if not selected_files_list:
-            QtWidgets.QMessageBox.warning(self, "No Selection", "Please check at least one file to merge.")
+            QtWidgets.QMessageBox.warning(self, "No Selection", "Please check at least one enabled MP3 file to merge.")
             return
-
-        logging.info(f"Preparing to merge {len(selected_files_list)} selected files.")
+        
+        logging.info(f"Preparing to merge {len(selected_files_list)} selected MP3 files using MoviePy: {selected_files_list}")
         self.startMerge(selected_files_list)
 
-
     def mergeAllForSelectedDate(self):
-        """
-        Merge all enabled (unmerged) files under the currently selected date item in the tree.
-        """
         selectedItems = self.treeWidget.selectedItems()
         if not selectedItems:
-            QtWidgets.QMessageBox.warning(self, "No Date Selected", "Please select a date item in the list first.")
+            QtWidgets.QMessageBox.warning(self, "No Date Selected", "Please select a date group item (e.g., '2023-10-26') or any file under it in the list first.")
             return
 
-        # Find the top-level date item that is selected or contains the selection
-        dateItem = None
         item = selectedItems[0]
-        # If a date item itself is selected
-        if item.parent() is None or item.parent() == self.treeWidget.invisibleRootItem():
+        dateItem = None
+        
+        # Determine if the selected item is a date item or a file item
+        if item.parent() is None or item.parent() == self.treeWidget.invisibleRootItem(): # It's a date item
             dateItem = item
-        # If a file item under a date is selected, get its parent
-        elif item.parent() is not None and (item.parent().parent() is None or item.parent().parent() == self.treeWidget.invisibleRootItem()):
+        elif item.parent() is not None and (item.parent().parent() is None or item.parent().parent() == self.treeWidget.invisibleRootItem()): # It's a file item, get its parent (date item)
              dateItem = item.parent()
 
-        if dateItem is None:
-             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Please select a valid date item or a file under it.")
+        if dateItem is None: # Should not happen if logic above is correct
+             QtWidgets.QMessageBox.warning(self, "Invalid Selection", "Could not determine the date group from your selection. Please select a date item directly.")
              return
 
-
-        date_str = dateItem.text(0)
-        logging.info(f"Preparing to merge all unmerged files under date '{date_str}'.")
-
-        files_to_merge = []
+        date_str_display = dateItem.text(0) # e.g. "2023-10-26 (Thursday)"
+        logging.info(f"Preparing to merge all unmerged MP3 files under date group '{date_str_display}' using MoviePy.")
+        
+        files_to_merge_basenames = []
         for j in range(dateItem.childCount()):
-            child = dateItem.child(j)
-            # Check if the child item is enabled (i.e., not already merged)
-            if not child.isDisabled():
-                files_to_merge.append(child.text(0))
-
-        if not files_to_merge:
-            QtWidgets.QMessageBox.information(self, "No Files", f"No files available to merge under date '{date_str}'.")
+            childFileItem = dateItem.child(j)
+            if not childFileItem.isDisabled(): # Only consider enabled (not already merged) files
+                basename = childFileItem.data(0, QtCore.Qt.UserRole)
+                if basename:
+                    files_to_merge_basenames.append(basename)
+        
+        if not files_to_merge_basenames:
+            QtWidgets.QMessageBox.information(self, "No Files to Merge", f"No enabled MP3 files available to merge under date group '{date_str_display}'.")
             return
 
-        logging.info(f"Found {len(files_to_merge)} files to merge for date {date_str}.")
-        # Sort them by time before starting merge
-        files_to_merge.sort(key=parse_time_from_filename)
-        self.startMerge(files_to_merge)
+        # Sort them chronologically (though they should already be if sourced from tree correctly)
+        files_to_merge_basenames.sort(key=parse_time_from_filename)
+        
+        logging.info(f"Found {len(files_to_merge_basenames)} MP3 files to merge for date group {date_str_display}: {files_to_merge_basenames}")
+        self.startMerge(files_to_merge_basenames)
 
-
-    def startTask(self, worker_class, *args, finish_slot, progress_message):
-        """Generic function to start a background task."""
+    def startTask(self, worker_class, worker_args_tuple, finish_slot, progress_message):
+        """ General method to start a worker in a QThread """
         self.current_workers += 1
         self.progressBar.setVisible(True)
-        self.progressBar.setRange(0, 0)  # Set to indeterminate mode
+        self.progressBar.setRange(0, 0) # Indeterminate progress
         self.updateStatus(progress_message)
         self.disableButtons()
 
-        thread = QtCore.QThread()
-        worker = worker_class(*args)
+        thread = QtCore.QThread(self) # Parent `self` for QThread
+        # Pass worker_args_tuple expanded to the worker constructor
+        worker = worker_class(*worker_args_tuple) 
         worker.moveToThread(thread)
 
-        # Connect signals and slots
+        # Connections
         thread.started.connect(worker.run)
         worker.progress.connect(self.updateStatus)
-        worker.finished.connect(finish_slot) # Connect to specific finish handler
-        worker.finished.connect(self.onTaskFinished) # Connect to generic handler
-        worker.finished.connect(thread.quit) # Quit thread when worker finishes
-        # Schedule cleanup using functools.partial
-        cleanup_slot = functools.partial(self.schedule_worker_cleanup, worker, thread)
-        worker.finished.connect(cleanup_slot)
-
-        # Store references for potential management (though cleanup is scheduled)
-        if not hasattr(self, 'active_threads'):
-             self.active_threads = []
-        self.active_threads.append((thread, worker))
-
+        worker.finished.connect(finish_slot) # Specific finish slot for this task type
+        worker.finished.connect(self.onTaskFinished) # Generic cleanup
+        
+        # Ensure thread quits and resources are cleaned up
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        
+        self.active_threads_workers.append((thread, worker)) # Keep references
         thread.start()
 
-    def schedule_worker_cleanup(self, worker, thread):
-         """Safely schedule cleanup after signals are processed."""
-         worker.deleteLater()
-         thread.deleteLater()
-         # Remove from active list
-         self.active_threads = [(t, w) for t, w in self.active_threads if w != worker]
-
-
     def onTaskFinished(self):
-        """Generic cleanup when any task finishes."""
+        """Generic slot called when any worker's 'finished' signal is emitted."""
         self.current_workers -= 1
+        
+        # Clean up the completed thread and worker from the list
+        sender_worker = self.sender() # The worker that emitted the signal
+        self.active_threads_workers = [(t, w) for t, w in self.active_threads_workers if w is not sender_worker]
+
         if self.current_workers <= 0:
             self.current_workers = 0 # Ensure it doesn't go negative
             self.progressBar.setVisible(False)
-            self.progressBar.setRange(0, 100) # Reset to determinate mode
+            self.progressBar.setRange(0, 100) # Reset for determinate (or hide)
             self.progressBar.setValue(0)
-            self.statusLabel.setText("Ready") # Reset status
+            self.updateStatus("Ready") # Reset status or show summary
             self.enableButtons()
+            logging.info("All tasks finished. UI enabled.")
         else:
-             logging.info(f"A task finished, but {self.current_workers} task(s) are still running. Buttons remain disabled.")
+             logging.info(f"A task finished. {self.current_workers} task(s) still running.")
 
+    def startMerge(self, files_basenames_list):
+        """ Initiates the merge operation with a list of basenames. """
+        output_dir = output_directory_path # Global or class member
+        # Worker arguments are passed as a tuple
+        worker_args = (files_basenames_list, output_dir) 
+        self.startTask(MergeWorker, worker_args,
+                       finish_slot=self.onMergeFinishedSpecific,
+                       progress_message="Merging MP3 files (MoviePy)...")
 
-    def startMerge(self, files):
-        """Start the merge process."""
-        # Determine output directory based on config or current dir
-        output_dir = output_directory_path # Use the globally determined path
-        self.startTask(MergeWorker, files, output_dir,
-                       finish_slot=self.onMergeFinishedSpecific, # Use specific handler first
-                       progress_message="Merging files...")
-
-    def onMergeFinishedSpecific(self, success, output_path, merged_files_list):
-        """Callback specific to merge worker completion."""
+    def onMergeFinishedSpecific(self, success, output_path, merged_original_files_basenames):
         if success:
-            QtWidgets.QMessageBox.information(self, "Merge Complete",
-                                              f"Merge successful!\nOutput: {output_path}")
-            # Mark the merged files so they become disabled in the list.
-            self.merged_files.update(merged_files_list)
-            self.refreshFileList() # Refresh list to show disabled items
+            QtWidgets.QMessageBox.information(self, "Merge Complete", f"Merge successful!\nOutput: {output_path}")
+            # Add the *original* basenames that were part of this successful merge to self.merged_files
+            self.merged_files.update(merged_original_files_basenames)
+            self.refreshFileList() # Refresh to show merged files as disabled/checked
         else:
-            QtWidgets.QMessageBox.critical(self, "Merge Failed", "An error occurred during the merge process. Please check logs for details.")
-        # Generic cleanup (like enabling buttons) is handled by onTaskFinished connected separately
-
+            QtWidgets.QMessageBox.critical(self, "Merge Failed", "An error occurred during the MP3 merge process. Please check logs for details.")
+            # No need to refresh list if it failed, unless partial results need indication
 
     def convertMp4Files(self):
-        """Start the MP4 to MP3 conversion process."""
-        self.startTask(ConvertWorker, # No extra args for ConvertWorker.__init__
+        # FFmpeg path check is primarily in the worker, but a pre-check or relying on worker's message is fine.
+        # The ConvertWorker now takes no arguments in constructor.
+        self.startTask(ConvertWorker, (), # Empty tuple for worker_args
                        finish_slot=self.onConvertFinishedSpecific,
-                       progress_message="Converting MP4 files to MP3...")
+                       progress_message="Converting MP4 to MP3 (FFmpeg)...")
 
-
-    def onConvertFinishedSpecific(self, success, successful_count, total_processed):
-        """Callback specific to conversion worker completion."""
-        if total_processed == 0 and success: # No files found is considered success
-             QtWidgets.QMessageBox.information(self, "Conversion", "No MP4 files found to convert.")
-        elif success:
+    def onConvertFinishedSpecific(self, overall_success, successful_count, total_processed):
+        # This slot receives: overall_success (bool), successful_count (int), total_processed (int)
+        if not overall_success and total_processed == 0 and successful_count == 0:
+            # This case implies the worker might have failed very early (e.g., FFmpeg not found as handled by worker)
+            if "ffmpeg not found" in self.statusLabel.text().lower(): # Check status message
+                 QtWidgets.QMessageBox.critical(self, "Conversion Error", f"MP4 to MP3 conversion failed: FFmpeg not found at '{PATH_TO_FFMPEG}'. Please check configuration.")
+            else:
+                 QtWidgets.QMessageBox.critical(self, "Conversion Error", "MP4 to MP3 conversion failed to start or process any files. Please check logs.")
+        elif total_processed == 0 and overall_success : # No MP4 files were found to convert
+             QtWidgets.QMessageBox.information(self, "Conversion Info", "No MP4 files found to convert.")
+        elif overall_success and successful_count == total_processed and total_processed > 0 : # All files converted successfully
              QtWidgets.QMessageBox.information(self, "Conversion Complete",
-                                               f"Successfully converted {successful_count}/{total_processed} MP4 files to MP3.")
-        else: # success is False
-             message = "An error occurred during conversion."
-             if successful_count > 0:
-                  message += f" Converted {successful_count} files successfully, but {total_processed - successful_count} failed."
-             QtWidgets.QMessageBox.warning(self, "Conversion Problem", message + " Please check logs.")
-
-        # Refresh file list after conversion (in case new MP3s were created)
-        self.refreshFileList()
-        # Generic cleanup handled by onTaskFinished
-
+                                               f"Successfully converted {successful_count}/{total_processed} MP4 files to MP3 using FFmpeg.")
+        elif not overall_success and total_processed > 0: # Some files processed, but not all were successful
+             QtWidgets.QMessageBox.warning(self, "Conversion Problem",
+                                            f"Conversion process completed. Successfully converted {successful_count} out of {total_processed} MP4 files using FFmpeg. Some files may have failed; please check logs for errors.")
+        else: # Fallback for any other unhandled status
+             QtWidgets.QMessageBox.error(self, "Conversion Status Unknown", f"Conversion finished. Success: {overall_success}, Converted: {successful_count}/{total_processed}. Check logs for details.")
+        
+        self.refreshFileList() # Refresh list as new MP3s might be present
 
     def removeSilenceSelectedFiles(self):
-        """Remove silent parts from the selected MP3 files using ffmpeg.exe."""
-        selected_files_list = self.getSelectedFiles()
-        if not selected_files_list:
-            QtWidgets.QMessageBox.warning(self, "No Selection", "Please check at least one audio file to process.")
+        selected_files_basenames = self.getSelectedFiles()
+        if not selected_files_basenames:
+            QtWidgets.QMessageBox.warning(self, "No Selection", "Please check at least one audio file to process for silence removal.")
+            return
+        
+        # FFmpeg path pre-check in UI (worker also checks)
+        if not PATH_TO_FFMPEG or not os.path.isfile(PATH_TO_FFMPEG):
+            QtWidgets.QMessageBox.critical(self, "FFmpeg Not Found",
+                                           f"FFmpeg not found at the configured path: {PATH_TO_FFMPEG}\n"
+                                           "Cannot remove silence. Please ensure FFmpeg is correctly configured in config.json or present in the script directory.")
             return
 
-        # Check if ffmpeg.exe exists before starting the task
-        ffmpeg_path = os.path.join(current_directory, "ffmpeg.exe")
-        if not os.path.isfile(ffmpeg_path):
-            QtWidgets.QMessageBox.critical(self, "Error", f"ffmpeg.exe not found in the application directory:\n{current_directory}\n\nCannot remove silence.")
-            return
-
-        logging.info(f"Preparing to remove silence from {len(selected_files_list)} selected files.")
-        self.startTask(RemoveSilenceWorker, selected_files_list,
+        logging.info(f"Preparing to remove silence from {len(selected_files_basenames)} selected files using FFmpeg: {selected_files_basenames}")
+        worker_args = (selected_files_basenames,) # Tuple with one element
+        self.startTask(RemoveSilenceWorker, worker_args,
                        finish_slot=self.onRemoveSilenceFinishedSpecific,
-                       progress_message="Removing silence from audio files...")
+                       progress_message="Removing silence from audio files (FFmpeg)...")
 
-
-    def onRemoveSilenceFinishedSpecific(self, success, successful_count, total_processed):
-        """Callback specific to remove silence worker completion."""
-        if success:
+    def onRemoveSilenceFinishedSpecific(self, overall_success, successful_count, total_processed):
+        if not overall_success and total_processed == 0 and successful_count == 0:
+             if "ffmpeg not found" in self.statusLabel.text().lower():
+                 QtWidgets.QMessageBox.critical(self, "Silence Removal Error", f"Silence removal failed: FFmpeg not found at '{PATH_TO_FFMPEG}'. Please check configuration.")
+             else:
+                QtWidgets.QMessageBox.critical(self, "Silence Removal Error", "Silence removal failed to start or process any files. Please check logs.")
+        elif total_processed == 0 and overall_success: # No files were selected or processed
+             QtWidgets.QMessageBox.information(self, "Silence Removal Info", "No files were processed for silence removal (e.g., none selected).")
+        elif overall_success and successful_count == total_processed and total_processed > 0:
             QtWidgets.QMessageBox.information(self, "Silence Removal Complete",
-                                              f"Successfully processed {successful_count}/{total_processed} file(s).")
+                                              f"Successfully processed {successful_count}/{total_processed} file(s) for silence removal.")
+        elif not overall_success and total_processed > 0 :
+             QtWidgets.QMessageBox.warning(self, "Silence Removal Problem",
+                                            f"Silence removal process completed. Successfully processed {successful_count} out of {total_processed} files. Some files may have failed; please check logs for errors.")
         else:
-             message = "An error occurred during silence removal."
-             if successful_count > 0:
-                  message += f" Processed {successful_count} files successfully, but {total_processed - successful_count} failed."
-
-             # Check if the failure might be due to missing ffmpeg (though checked before starting)
-             ffmpeg_path = os.path.join(current_directory, "ffmpeg.exe")
-             if not os.path.isfile(ffmpeg_path):
-                  message += "\nError: ffmpeg.exe was not found."
-
-             QtWidgets.QMessageBox.warning(self, "Silence Removal Problem", message + " Please check logs.")
-
-        # Refresh file list as new files might have been created (_nosilence)
-        self.refreshFileList()
-        # Generic cleanup handled by onTaskFinished
-
+             QtWidgets.QMessageBox.error(self, "Silence Removal Status Unknown", f"Silence removal finished. Success: {overall_success}, Processed: {successful_count}/{total_processed}. Check logs for details.")
+        
+        self.refreshFileList() # New "_nosilence" files might be present
 
     def organizeFiles(self):
-        """Organize MP3 files by date, move them to folders, and create ZIP archives."""
         reply = QtWidgets.QMessageBox.question(
-            self,
-            "Confirm File Organization", # Title
-            "This action will organize all MP3 files in the current directory by date, move them into new folders, and attempt to create a ZIP archive for each folder.\n\nOriginal MP3 files will be MOVED. Please confirm.\n\nContinue?", # Message text
-            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No, # Buttons
-            QtWidgets.QMessageBox.StandardButton.No # Default button
+            self, "Confirm File Organization",
+            "This action will:\n"
+            "1. Scan all MP3 files in the current directory.\n"
+            "2. Group them by date (parsed from filename).\n"
+            "3. Create a new subfolder for each date group (e.g., 'YYYYMMDD HH-MM').\n"
+            "4. MOVE the original MP3 files into these new subfolders.\n"
+            "5. Attempt to create a ZIP archive for each created subfolder (requires 7-Zip).\n\n"
+            "IMPORTANT: Original MP3 files will be MOVED from their current location.\n\n"
+            "Do you want to proceed?",
+            QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
+            QtWidgets.QMessageBox.StandardButton.No # Default to No
         )
-
         if reply != QtWidgets.QMessageBox.StandardButton.Yes:
+            self.updateStatus("Organization cancelled by user.")
             return
 
-        # Check or ask for 7-Zip path
-        path_to_7zip = PATH_TO_7ZIP # Get from config or default
-        effective_7zip_path = "" # Path to pass to worker
-
-        if path_to_7zip and os.path.isfile(path_to_7zip):
-            effective_7zip_path = path_to_7zip
+        # Determine 7-Zip path (similar to your existing logic but slightly streamlined)
+        effective_7zip_path = ""
+        config_7zip_path = PATH_TO_7ZIP # From global config
+        
+        if config_7zip_path and os.path.isfile(config_7zip_path):
+            effective_7zip_path = config_7zip_path
             logging.info(f"Using 7-Zip path from config/default: {effective_7zip_path}")
         else:
-            logging.warning(f"7-Zip path from config/default is invalid or not set: {path_to_7zip}")
-            # Try finding it in common locations
+            logging.warning(f"7-Zip path from config/default ('{config_7zip_path}') is invalid or not set. Attempting auto-detection or user selection.")
             common_paths = [
-                "C:\\Program Files\\7-Zip\\7z.exe",
-                "C:\\Program Files (x86)\\7-Zip\\7z.exe",
-                "/usr/bin/7z", # Linux common path
-                "/usr/local/bin/7z" # Another common path
+                "C:\\Program Files\\7-Zip\\7z.exe", "C:\\Program Files (x86)\\7-Zip\\7z.exe",
+                "/usr/bin/7z", "/usr/local/bin/7z", "/opt/homebrew/bin/7z" # For macOS Homebrew
             ]
-            found = False
+            found_automatically = False
             for p in common_paths:
                 if os.path.isfile(p):
                     effective_7zip_path = p
                     logging.info(f"Auto-detected 7-Zip at: {effective_7zip_path}")
-                    found = True
+                    found_automatically = True
                     break
-
-            if not found:
-                # Ask user only if not found automatically
+            
+            if not found_automatically:
+                self.updateStatus("7-Zip not found in common locations. Please select it.")
                 selected_path, _ = QtWidgets.QFileDialog.getOpenFileName(
-                    self,
-                    "Select 7-Zip Executable (7z.exe or 7z)",
-                    os.path.expanduser("~"), # Start directory
-                    "Executable Files (*.exe);;All Files (*)" # File filter
+                    self, "Locate 7-Zip Executable (e.g., 7z.exe or 7z)",
+                    os.path.expanduser("~"), # Start in user's home directory
+                    "Executable Files (*.exe);;All Files (*)"
                 )
                 if selected_path and os.path.isfile(selected_path):
                     effective_7zip_path = selected_path
                     logging.info(f"User selected 7-Zip path: {effective_7zip_path}")
                 else:
-                    # User cancelled or selected invalid file
-                    QtWidgets.QMessageBox.warning(self, "7-Zip Not Found", "Could not find 7-Zip executable.\nFiles will be organized into folders, but ZIP archives will not be created.")
-                    effective_7zip_path = "" # Pass empty string to worker to indicate no zipping
-
-        logging.info(f"Starting file organization. Using 7-Zip path: '{effective_7zip_path if effective_7zip_path else 'N/A'}'")
-        # Pass the determined path (or empty string) to the worker
-        self.startTask(OrganizeWorker, effective_7zip_path,
-                       finish_slot=self.onOrganizeFinishedSpecific,
-                       progress_message="Organizing files by date...")
-
-
-    def onOrganizeFinishedSpecific(self, success, folder_count, zip_count):
-        """Callback specific to organization worker completion."""
-        # Access the path used by the worker if needed (e.g., via self.sender())
-        worker_instance = self.sender()
-        zipping_attempted = bool(worker_instance.path_to_7zip) if worker_instance else False
-
-        if success:
-            message = f"Successfully organized files into {folder_count} folders."
-            if zipping_attempted:
-                 if zip_count == folder_count and folder_count > 0:
-                     message += f" Successfully created {zip_count} ZIP archives."
-                 elif zip_count > 0:
-                      message += f" Successfully created {zip_count}/{folder_count} ZIP archives."
-                 elif folder_count > 0: # Zipping attempted but failed for all
-                      message += f" However, failed to create any ZIP archives (0/{folder_count}). Please check 7-Zip path and logs."
-                 # else: folder_count is 0, message already covers it.
-            # else: Zipping was not attempted, message already covers folder creation.
-
-            QtWidgets.QMessageBox.information(self, "Organization Complete", message)
+                    QtWidgets.QMessageBox.warning(self, "7-Zip Not Found",
+                                                  "7-Zip executable was not found or selected.\n"
+                                                  "Files will be organized into folders, but ZIP archives will NOT be created.")
+                    effective_7zip_path = "" # Ensure it's empty if no valid path
+        
+        if effective_7zip_path:
+             self.updateStatus(f"Starting organization. 7-Zip found at: {effective_7zip_path}. ZIPs will be attempted.")
         else:
-            # Organization process itself failed
-            QtWidgets.QMessageBox.warning(
-                self,
-                "Organization Problem",
-                f"An error occurred during file organization. Created {folder_count} folders and {zip_count} ZIPs (process may be incomplete).\nPlease check logs for details."
-            )
-        # Refresh file list as files have been moved
-        self.refreshFileList()
-        # Generic cleanup handled by onTaskFinished
+             self.updateStatus("Starting organization. 7-Zip NOT found. ZIPs will be skipped.")
 
+        worker_args = (effective_7zip_path,) # Tuple with one element
+        self.startTask(OrganizeWorker, worker_args,
+                       finish_slot=self.onOrganizeFinishedSpecific,
+                       progress_message="Organizing MP3 files by date and creating ZIPs...")
+
+    def onOrganizeFinishedSpecific(self, overall_success, folder_count, zip_count):
+        # `overall_success` from OrganizeWorker indicates if the organization part (moving files) was generally okay.
+        # `folder_count` is number of date folders created.
+        # `zip_count` is number of successful ZIPs.
+
+        sender_worker = self.sender() # Get the worker instance
+        zipping_was_attempted = False
+        if sender_worker and isinstance(sender_worker, OrganizeWorker):
+            zipping_was_attempted = bool(sender_worker.path_to_7zip_exe) # Check if 7zip path was provided to worker
+
+        if overall_success:
+            message = f"Organization process completed.\nCreated {folder_count} date folder(s)."
+            if folder_count == 0:
+                 message = "No date-stamped MP3 files found that matched the criteria for organization."
+            
+            if zipping_was_attempted and folder_count > 0:
+                message += f"\nSuccessfully created {zip_count} ZIP archive(s)."
+                if zip_count < folder_count:
+                    message += f" ({folder_count - zip_count} ZIP operation(s) may have failed; please check logs and 7-Zip path)."
+            elif not zipping_was_attempted and folder_count > 0:
+                message += "\nZIP archive creation was skipped (7-Zip not found or specified)."
+            
+            QtWidgets.QMessageBox.information(self, "Organization Finished", message)
+        else:
+            # This implies a more significant error during the organization (file moving) stage.
+            QtWidgets.QMessageBox.warning(
+                self, "Organization Problem",
+                f"A critical error occurred during file organization. Process may be incomplete.\n"
+                f"Folders created: {folder_count}, ZIPs created: {zip_count}.\n"
+                "Please check logs for detailed error messages."
+            )
+        
+        self.refreshFileList() # Refresh to show new folder structure (though this app doesn't show folders yet)
+                               # or to reflect moved files (they'll disappear from root).
 
     def updateStatus(self, message):
-        """Update the status label text and log the message."""
         self.statusLabel.setText(message)
-        # Avoid logging redundancy if message comes directly from worker logging
-        # logging.info(message)
-
+        logging.info(f"Status: {message}") # Also log status updates
 
     def disableButtons(self):
-        """Disable all action buttons and settings to prevent concurrent operations."""
+        # Centralize button disabling
         widgets_to_disable = [
             self.mergeButton, self.mergeAllButton, self.refreshButton,
             self.convertButton, self.removeSilenceButton, self.organizeButton,
@@ -1642,8 +1467,7 @@ class MainWindow(QtWidgets.QMainWindow):
             widget.setEnabled(False)
 
     def enableButtons(self):
-        """Enable all action buttons and settings after background task(s) complete."""
-        # Only enable if no other workers are running
+        # Centralize button enabling, only if no workers are active
         if self.current_workers == 0:
              widgets_to_enable = [
                  self.mergeButton, self.mergeAllButton, self.refreshButton,
@@ -1652,46 +1476,53 @@ class MainWindow(QtWidgets.QMainWindow):
              ]
              for widget in widgets_to_enable:
                  widget.setEnabled(True)
-        # else: Keep buttons disabled if other tasks are still running
-
 
     def closeEvent(self, event):
-        """Handle window close event."""
-        # Optional: Add logic here to gracefully stop running threads if desired.
-        # This can be complex. A simple approach is just to log and exit.
         if self.current_workers > 0:
              reply = QtWidgets.QMessageBox.question(
-                 self,
-                 "Tasks Running",
-                 f"{self.current_workers} task(s) are still running in the background.\nExiting now might interrupt them.\n\nAre you sure you want to exit?",
+                 self, "Tasks Still Running",
+                 f"{self.current_workers} background task(s) are still running.\n"
+                 "Exiting now might interrupt them and leave things in an inconsistent state.\n\n"
+                 "Are you sure you want to exit?",
                  QtWidgets.QMessageBox.StandardButton.Yes | QtWidgets.QMessageBox.StandardButton.No,
-                 QtWidgets.QMessageBox.StandardButton.No
+                 QtWidgets.QMessageBox.StandardButton.No # Default to No
              )
              if reply == QtWidgets.QMessageBox.StandardButton.No:
-                  event.ignore() # Prevent closing
+                  event.ignore()
                   return
+        
+        # Attempt to gracefully quit any running QThreads if any are somehow missed by onTaskFinished logic
+        # This is a fallback, normally active_threads_workers should be empty if current_workers is 0
+        for thread, worker in self.active_threads_workers:
+            if thread.isRunning():
+                logging.info(f"Requesting quit for thread: {thread}")
+                thread.quit()
+                if not thread.wait(1000): # Wait up to 1 sec for thread to finish
+                    logging.warning(f"Thread {thread} did not finish gracefully, terminating.")
+                    thread.terminate() # Force terminate if doesn't quit
+                    thread.wait() # Wait for termination
 
-        logging.info("Closing application.")
-        # Terminating threads forcefully is generally unsafe.
-        # Let Python's exit process handle cleanup if user confirms exit.
-        # for thread, worker in getattr(self, 'active_threads', []):
-        #     if thread.isRunning():
-        #         thread.terminate() # Forceful termination (use with caution)
+        logging.info("Closing Audio Toolbox application.")
         super().closeEvent(event)
 
-
 if __name__ == "__main__":
-    # Ensure GUI scales well on high-DPI displays
+    # Enable High DPI scaling for better visuals on high-resolution displays
     if hasattr(QtCore.Qt, 'AA_EnableHighDpiScaling'):
         QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_EnableHighDpiScaling, True)
     if hasattr(QtCore.Qt, 'AA_UseHighDpiPixmaps'):
         QtWidgets.QApplication.setAttribute(QtCore.Qt.AA_UseHighDpiPixmaps, True)
-
+    
     app = QtWidgets.QApplication(sys.argv)
-
-    # Set application info (optional, used by some OS features)
     app.setApplicationName("AudioToolbox")
-    app.setOrganizationName("YourOrganization") # Optional
+    app.setOrganizationName("YourOrganizationName") # Optional: For settings, etc.
+    
+    # Example: Set a nicer style if available
+    # available_styles = QtWidgets.QStyleFactory.keys()
+    # if "Fusion" in available_styles:
+    #    app.setStyle(QtWidgets.QStyleFactory.create("Fusion"))
+    # elif "WindowsVista" in available_styles and platform.system() == "Windows": # Or "Windows" for native
+    #    app.setStyle(QtWidgets.QStyleFactory.create("WindowsVista"))
+
 
     window = MainWindow()
     window.show()
