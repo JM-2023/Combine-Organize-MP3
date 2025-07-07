@@ -568,6 +568,108 @@ def process_date_group(args):
         return date_str, None, False # Indicate failure
 
 # ----------------------------
+# Function to find OBS save location on macOS
+# ----------------------------
+def find_obs_save_location():
+    """Find OBS default save location on macOS"""
+    # Common OBS save locations on macOS
+    home = os.path.expanduser("~")
+    possible_locations = [
+        os.path.join(home, "Movies"),  # Default macOS Movies folder
+        os.path.join(home, "Videos"),  # Alternative
+        os.path.join(home, "Documents", "OBS"),  # Some users configure this
+        os.path.join(home, "Desktop"),  # Some users save to desktop
+    ]
+    
+    # Check if any of these exist and contain MP4 files
+    for location in possible_locations:
+        if os.path.exists(location):
+            try:
+                mp4_files = [f for f in os.listdir(location) 
+                           if f.lower().endswith('.mp4') and os.path.isfile(os.path.join(location, f))]
+                if mp4_files:
+                    logging.info(f"Found OBS recordings in: {location}")
+                    return location
+            except Exception as e:
+                logging.warning(f"Could not check {location}: {e}")
+    
+    # If no MP4 files found in common locations, return the most likely default
+    default_location = os.path.join(home, "Movies")
+    if os.path.exists(default_location):
+        return default_location
+    
+    return None
+
+# ----------------------------
+# Function to import OBS recordings
+# ----------------------------
+def import_obs_recordings(source_dir, dest_dir, progress_callback=None):
+    """Import MP4 files from OBS directory to script directory (move/cut operation)"""
+    if not os.path.exists(source_dir):
+        logging.error(f"Source directory does not exist: {source_dir}")
+        return False, 0, []
+    
+    try:
+        # Find all MP4 files in source directory
+        mp4_files = [f for f in os.listdir(source_dir) 
+                    if f.lower().endswith('.mp4') and os.path.isfile(os.path.join(source_dir, f))]
+        
+        if not mp4_files:
+            logging.info("No MP4 files found in OBS directory")
+            if progress_callback:
+                progress_callback("No MP4 files found to import")
+            return True, 0, []
+        
+        moved_files = []
+        skipped_files = []
+        total_files = len(mp4_files)
+        
+        for i, file in enumerate(mp4_files):
+            source_path = os.path.join(source_dir, file)
+            dest_path = os.path.join(dest_dir, file)
+            
+            # Check if file already exists
+            if os.path.exists(dest_path):
+                # Compare file sizes to determine if it's the same file
+                if os.path.getsize(source_path) == os.path.getsize(dest_path):
+                    skipped_files.append(file)
+                    if progress_callback:
+                        progress_callback(f"Skipping {i+1}/{total_files}: {file} (already exists)")
+                    continue
+                else:
+                    # File exists but different size, rename the new one
+                    base, ext = os.path.splitext(file)
+                    counter = 1
+                    while os.path.exists(dest_path):
+                        dest_path = os.path.join(dest_dir, f"{base}_{counter}{ext}")
+                        counter += 1
+            
+            try:
+                # Move the file (cut operation)
+                shutil.move(source_path, dest_path)
+                moved_files.append(file)
+                if progress_callback:
+                    progress_callback(f"Moved {i+1}/{total_files}: {file}")
+                logging.info(f"Moved: {file}")
+            except Exception as e:
+                logging.error(f"Failed to move {file}: {e}")
+                if progress_callback:
+                    progress_callback(f"Error moving {file}: {str(e)}")
+        
+        success_msg = f"Import complete: {len(moved_files)} files moved"
+        if skipped_files:
+            success_msg += f", {len(skipped_files)} skipped (already exist)"
+        
+        if progress_callback:
+            progress_callback(success_msg)
+        
+        return True, len(moved_files), moved_files
+        
+    except Exception as e:
+        logging.error(f"Error during OBS import: {e}\n{traceback.format_exc()}")
+        return False, 0, []
+
+# ----------------------------
 # Function to create a ZIP archive
 # ----------------------------
 def create_zip_archive(args):
@@ -837,6 +939,24 @@ class RemoveSilenceWorker(QtCore.QObject): # Uses FFmpeg
             self.finished.emit(False, successful_count, processed_count)
 
 
+class ImportOBSWorker(QtCore.QObject):
+    finished = QtCore.pyqtSignal(bool, int, list) # success, copied_count, copied_files
+    progress = QtCore.pyqtSignal(str)
+    
+    def __init__(self, source_dir, dest_dir, parent=None):
+        super().__init__(parent)
+        self.source_dir = source_dir
+        self.dest_dir = dest_dir
+    
+    @QtCore.pyqtSlot()
+    def run(self):
+        self.progress.emit("Importing OBS recordings...")
+        success, copied_count, copied_files = import_obs_recordings(
+            self.source_dir, self.dest_dir, self.progress.emit
+        )
+        self.finished.emit(success, copied_count, copied_files)
+
+
 class OrganizeWorker(QtCore.QObject): # Uses 7-Zip for zipping
     finished = QtCore.pyqtSignal(bool, int, int) # overall_success, folder_count, zip_count
     progress = QtCore.pyqtSignal(str)
@@ -1086,6 +1206,7 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Create modern buttons with icons
         button_data = [
+            ("📥 Import OBS Recordings", "Move MP4 files from OBS save folder", self.importOBSRecordings),
             ("🎵 Merge Selected MP3s", "Merge all selected MP3 files using MoviePy", self.mergeSelectedFiles),
             ("📅 Merge by Date", "Merge all unmerged MP3s for selected date", self.mergeAllForSelectedDate),
             ("🎬 Convert MP4 to MP3", "Convert all MP4 files to MP3 using FFmpeg", self.convertMp4Files),
@@ -1685,6 +1806,82 @@ class MainWindow(QtWidgets.QMainWindow):
             self.refreshFileList()
         else:
             self.hideProgress("❌ Organization failed")
+
+    def importOBSRecordings(self):
+        """Import MP4 files from OBS save directory"""
+        # Find OBS save location
+        obs_dir = find_obs_save_location()
+        
+        if not obs_dir:
+            # Let user manually select directory
+            obs_dir = QtWidgets.QFileDialog.getExistingDirectory(
+                self,
+                "Select OBS Recordings Directory",
+                os.path.expanduser("~/Movies"),
+                QtWidgets.QFileDialog.ShowDirsOnly
+            )
+            if not obs_dir:
+                return
+        
+        # Show confirmation dialog with detected location
+        mp4_count = 0
+        try:
+            mp4_files = [f for f in os.listdir(obs_dir) 
+                        if f.lower().endswith('.mp4') and os.path.isfile(os.path.join(obs_dir, f))]
+            mp4_count = len(mp4_files)
+        except:
+            pass
+        
+        if mp4_count == 0:
+            QtWidgets.QMessageBox.information(
+                self,
+                "No MP4 Files",
+                f"No MP4 files found in:\n{obs_dir}\n\nPlease select a different directory."
+            )
+            return
+        
+        reply = QtWidgets.QMessageBox.question(
+            self,
+            "Import OBS Recordings",
+            f"Found {mp4_count} MP4 file(s) in:\n{obs_dir}\n\nDo you want to move them to the current directory?\n\nNote: Files will be moved (cut), not copied.",
+            QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
+        )
+        
+        if reply != QtWidgets.QMessageBox.Yes:
+            return
+        
+        self.showProgress(f"Importing {mp4_count} MP4 files...")
+        
+        # Create and setup worker
+        worker = ImportOBSWorker(obs_dir, current_directory)
+        thread = QtCore.QThread()
+        worker.moveToThread(thread)
+        
+        # Connect signals
+        thread.started.connect(worker.run)
+        worker.progress.connect(self.showProgress)
+        worker.finished.connect(lambda success, count, files: self.onImportFinished(success, count, files, thread, worker))
+        worker.finished.connect(thread.quit)
+        worker.finished.connect(worker.deleteLater)
+        thread.finished.connect(thread.deleteLater)
+        
+        # Start
+        self.current_workers += 1
+        self.active_threads_workers.append((thread, worker))
+        thread.start()
+
+    def onImportFinished(self, success, copied_count, copied_files, thread, worker):
+        self.current_workers -= 1
+        self.active_threads_workers.remove((thread, worker))
+        
+        if success:
+            if copied_count > 0:
+                self.hideProgress(f"✓ Moved {copied_count} MP4 files")
+                self.refreshFileList()
+            else:
+                self.hideProgress("✓ No new files to move")
+        else:
+            self.hideProgress("❌ Move failed")
 
 def main():
     # Enable high-DPI support before creating QApplication
