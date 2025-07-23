@@ -8,18 +8,20 @@ import json
 import logging
 import subprocess
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import concurrent.futures
 import platform
 import traceback
+import pytz
+from datetime import timezone as dt_timezone
 # moviepy imports (still needed for MP3 merging)
 from moviepy import concatenate_audioclips, AudioFileClip
 # PyQt5 imports
 from PyQt5 import QtCore, QtWidgets, QtGui
 from PyQt5.QtCore import Qt, QPropertyAnimation, QEasingCurve, pyqtProperty
-from PyQt5.QtWidgets import QGraphicsDropShadowEffect, QWidget
+from PyQt5.QtWidgets import QGraphicsDropShadowEffect, QWidget, QStyledItemDelegate
 from PyQt5.QtGui import QPalette, QColor, QLinearGradient, QPainter, QBrush, QPen
 
 # Set up logging
@@ -1082,6 +1084,42 @@ class OrganizeWorker(QtCore.QObject): # Uses 7-Zip for zipping
         self.finished.emit(organization_completed_successfully, organized_folder_count, successful_zip_count)
 
 # ----------------------------
+# Custom Delegate for Background Colors
+# ----------------------------
+class ColoredItemDelegate(QStyledItemDelegate):
+    """Custom delegate to paint background colors for tree items"""
+    
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.item_colors = {}  # Store colors for each item
+    
+    def paint(self, painter, option, index):
+        """Custom paint method to draw background colors"""
+        # Get color from item data
+        color = index.data(Qt.UserRole + 1)
+        
+        if color:
+            # Save the painter state
+            painter.save()
+            
+            # Draw the background color
+            painter.fillRect(option.rect, QColor(color))
+            
+            # If selected, draw a semi-transparent selection overlay
+            if option.state & QtWidgets.QStyle.State_Selected:
+                painter.fillRect(option.rect, QColor(0, 122, 255, 30))
+            
+            # Restore painter state
+            painter.restore()
+        
+        # Remove the selected state to prevent default selection rendering
+        if color and option.state & QtWidgets.QStyle.State_Selected:
+            option.state &= ~QtWidgets.QStyle.State_Selected
+        
+        # Call the base implementation to draw the text and other elements
+        super().paint(painter, option, index)
+
+# ----------------------------
 # Modern PyQt5 GUI Implementation
 # ----------------------------
 class MainWindow(QtWidgets.QMainWindow):
@@ -1093,6 +1131,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.output_files = {}  # Dict mapping output files to their source files
         self.current_workers = 0
         self.active_threads_workers = []
+        self.selected_timezone = "UTC"  # Default timezone
 
         self.initUI()
         self.applyModernStyles()
@@ -1156,9 +1195,13 @@ class MainWindow(QtWidgets.QMainWindow):
         # File Tree with modern styling
         self.treeWidget = QtWidgets.QTreeWidget()
         self.treeWidget.setHeaderLabels(["📁 Files by Date"])
-        self.treeWidget.setAlternatingRowColors(True)
+        self.treeWidget.setAlternatingRowColors(False)  # Disabled to allow custom background colors
         self.treeWidget.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
         self.treeWidget.setMinimumHeight(350)
+        
+        # Set custom delegate for coloring
+        self.colorDelegate = ColoredItemDelegate(self.treeWidget)
+        self.treeWidget.setItemDelegate(self.colorDelegate)
         
         # Add shadow effect to tree widget
         tree_shadow = QGraphicsDropShadowEffect()
@@ -1266,6 +1309,35 @@ class MainWindow(QtWidgets.QMainWindow):
         cpuLabel.setStyleSheet("color: #666666; font-size: 11pt;")
         layout.addRow("CPU:", cpuLabel)
         
+        # Timezone selector
+        self.timezoneCombo = QtWidgets.QComboBox()
+        self.timezoneCombo.setMinimumHeight(32)
+        self.timezoneCombo.setToolTip("Select timezone for file grouping (unmerged files only)")
+        
+        # Add common timezones
+        common_timezones = [
+            "UTC",
+            "US/Eastern",
+            "US/Central", 
+            "US/Mountain",
+            "US/Pacific",
+            "Europe/London",
+            "Europe/Paris",
+            "Europe/Berlin",
+            "Asia/Tokyo",
+            "Asia/Shanghai",
+            "Australia/Sydney",
+            "America/New_York",
+            "America/Chicago",
+            "America/Denver",
+            "America/Los_Angeles"
+        ]
+        
+        self.timezoneCombo.addItems(common_timezones)
+        self.timezoneCombo.setCurrentText(self.selected_timezone)
+        self.timezoneCombo.currentTextChanged.connect(self.onTimezoneChanged)
+        layout.addRow("Timezone:", self.timezoneCombo)
+        
         return panel
 
     def createProgressSection(self):
@@ -1311,7 +1383,7 @@ class MainWindow(QtWidgets.QMainWindow):
             border: 1px solid #d2d2d7;
             border-radius: 12px;
             margin-top: 12px;
-            background-color: rgba(255, 255, 255, 0.9);
+            background-color: transparent;
             padding: 20px 15px 15px 15px;
         }
         
@@ -1357,7 +1429,6 @@ class MainWindow(QtWidgets.QMainWindow):
             background-color: white;
             border: 1px solid #d2d2d7;
             border-radius: 10px;
-            alternate-background-color: #fafafa;
             outline: none;
             font-size: 13px;
             show-decoration-selected: 0;
@@ -1369,17 +1440,16 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         
         QTreeWidget::item:selected {
-            background-color: transparent;
+            background-color: rgba(0, 122, 255, 0.1);
             color: #1d1d1f;
         }
         
-        QTreeWidget::item:hover:!disabled:!selected {
-            background-color: #f0f0f2;
+        QTreeWidget::item:hover {
+            background-color: rgba(0, 0, 0, 0.03);
         }
         
         QTreeWidget::item:disabled {
             color: #969696;
-            background-color: rgba(0, 0, 0, 0.03);
         }
         
         QHeaderView::section {
@@ -1418,6 +1488,35 @@ class MainWindow(QtWidgets.QMainWindow):
         QSpinBox:focus {
             border-color: #007AFF;
             outline: none;
+        }
+        
+        /* Combo Box */
+        QComboBox {
+            padding: 6px 10px;
+            border: 1px solid #d2d2d7;
+            border-radius: 6px;
+            background-color: white;
+            min-width: 120px;
+            font-size: 13px;
+        }
+        
+        QComboBox:focus {
+            border-color: #007AFF;
+            outline: none;
+        }
+        
+        QComboBox::drop-down {
+            border: none;
+            width: 20px;
+        }
+        
+        QComboBox::down-arrow {
+            image: none;
+            width: 0;
+            height: 0;
+            border-left: 4px solid transparent;
+            border-right: 4px solid transparent;
+            border-top: 6px solid #8e8e93;
         }
         
         QSpinBox::up-button, QSpinBox::down-button {
@@ -1479,17 +1578,31 @@ class MainWindow(QtWidgets.QMainWindow):
     def refreshFileList(self):
         """Refresh the file tree with current directory contents"""
         self.treeWidget.clear()
+        # Clear delegate colors when refreshing
+        self.colorDelegate.item_colors.clear()
         # Don't clear merged_files or output_files - keep track across refreshes
         
         try:
             files_by_date = defaultdict(list)
             output_files_by_date = defaultdict(list)
+            # Track timezone-adjusted dates for unmerged files
+            tz_adjusted_dates = {}  # file -> adjusted_date
+            unique_tz_days = set()  # Set of unique days in selected timezone
             
             # Scan for MP3 files
             for file in os.listdir(current_directory):
                 if file.lower().endswith('.mp3'):
                     date, time = parse_date_and_time_from_filename(file)
-                    if date:
+                    if date and time:
+                        # Combine date and time to get full datetime
+                        file_datetime = datetime.combine(date, time)
+                        
+                        # For unmerged files, calculate timezone-adjusted date
+                        if file not in self.output_files and file not in self.merged_files:
+                            adjusted_date = self.getTimezoneAdjustedDate(file_datetime, self.selected_timezone)
+                            tz_adjusted_dates[file] = adjusted_date
+                            unique_tz_days.add(adjusted_date)
+                        
                         date_str = date.strftime('%Y-%m-%d')
                         # Check if this is an output file from merging
                         if file in self.output_files:
@@ -1501,6 +1614,10 @@ class MainWindow(QtWidgets.QMainWindow):
                             output_files_by_date['Unknown Date'].append(file)
                         else:
                             files_by_date['Unknown Date'].append(file)
+            
+            # Create a sorted list of unique timezone days and assign colors
+            sorted_tz_days = sorted(unique_tz_days)
+            day_to_color_index = {day: i for i, day in enumerate(sorted_tz_days)}
             
             # Build tree structure
             all_dates = sorted(set(files_by_date.keys()) | set(output_files_by_date.keys()))
@@ -1526,6 +1643,28 @@ class MainWindow(QtWidgets.QMainWindow):
                         file_item.setText(0, file)
                         file_item.setCheckState(0, Qt.Unchecked)
                         file_item.setData(0, Qt.UserRole, file)
+                        
+                        # Apply timezone-based color for unmerged files
+                        if file in tz_adjusted_dates:
+                            adjusted_date = tz_adjusted_dates[file]
+                            color_index = day_to_color_index.get(adjusted_date, 0)
+                            color = self.getDayColor(color_index)
+                            
+                            # Try a simpler approach - store color data directly on the item
+                            file_item.setData(0, Qt.UserRole + 1, color)
+                            
+                            # Force a visual update
+                            self.treeWidget.viewport().update()
+                            
+                            logging.info(f"Set color {color} (index {color_index}) for file {file} - adjusted date: {adjusted_date}")
+                            
+                            # Add tooltip showing timezone-adjusted date
+                            tz_date_str = adjusted_date.strftime('%Y-%m-%d')
+                            original_date = date.strftime('%Y-%m-%d')
+                            if tz_date_str != original_date:
+                                file_item.setToolTip(0, f"Original date: {original_date}\nIn {self.selected_timezone} (5am cutoff): {tz_date_str}")
+                            else:
+                                file_item.setToolTip(0, f"In {self.selected_timezone}: {tz_date_str} (same as original)")
                 
                 # Then add merged output files
                 for output_file in sorted(output_files_by_date.get(date_str, [])):
@@ -1582,6 +1721,66 @@ class MainWindow(QtWidgets.QMainWindow):
         global MAX_WORKERS
         MAX_WORKERS = value
         logging.info(f"Max parallel tasks updated to: {value}")
+    
+    def onTimezoneChanged(self, timezone_name):
+        """Handle timezone selection change"""
+        self.selected_timezone = timezone_name
+        logging.info(f"Timezone changed to: {timezone_name}")
+        self.refreshFileList()
+    
+    def getTimezoneAdjustedDate(self, file_datetime, timezone_name):
+        """Convert file datetime to selected timezone and adjust for 5am cutoff"""
+        try:
+            # File timestamps are naive and represent local system time
+            # We need to convert from local time to the selected timezone
+            
+            # Get system's local timezone offset
+            local_now = datetime.now()
+            local_tz_aware = local_now.astimezone()
+            local_tz = local_tz_aware.tzinfo
+            
+            # Make the file datetime timezone-aware using system timezone
+            # Since we can't directly use the tzinfo from astimezone() with pytz,
+            # we'll use a workaround: assume the file is in the same timezone as now
+            local_offset = local_tz_aware.utcoffset()
+            utc_datetime = file_datetime - local_offset
+            
+            # Now convert to the target timezone
+            target_tz = pytz.timezone(timezone_name)
+            utc_aware = pytz.utc.localize(utc_datetime)
+            tz_dt = utc_aware.astimezone(target_tz)
+            
+            # Log the conversion for debugging
+            logging.info(f"File: {file_datetime} (local) -> {tz_dt} ({timezone_name})")
+            
+            # Apply 5am cutoff - if time is before 5am, consider it part of previous day
+            if tz_dt.hour < 5:
+                adjusted_date = (tz_dt - timedelta(days=1)).date()
+                logging.info(f"Applied 5am cutoff: {tz_dt.date()} -> {adjusted_date}")
+            else:
+                adjusted_date = tz_dt.date()
+                
+            return adjusted_date
+        except Exception as e:
+            logging.error(f"Error adjusting timezone for datetime {file_datetime}: {e}")
+            return file_datetime.date()
+    
+    def getDayColor(self, day_index):
+        """Get a color for a given day index"""
+        # Define a palette of distinct colors for different days (stronger colors)
+        colors = [
+            "#FFB3B3",  # Light red
+            "#B3D9FF",  # Light blue
+            "#B3FFB3",  # Light green
+            "#FFFFB3",  # Light yellow
+            "#E6B3FF",  # Light purple
+            "#FFB3E6",  # Light pink
+            "#B3FFE6",  # Light mint
+            "#FFE6B3",  # Light orange
+            "#B3B3FF",  # Light indigo
+            "#E6FFB3",  # Light lime
+        ]
+        return colors[day_index % len(colors)]
 
     def showProgress(self, message):
         """Show progress with animation"""
