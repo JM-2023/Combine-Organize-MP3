@@ -1660,11 +1660,14 @@ class MainWindow(QtWidgets.QMainWindow):
                             
                             # Add tooltip showing timezone-adjusted date
                             tz_date_str = adjusted_date.strftime('%Y-%m-%d')
-                            original_date = date.strftime('%Y-%m-%d')
-                            if tz_date_str != original_date:
-                                file_item.setToolTip(0, f"Original date: {original_date}\nIn {self.selected_timezone} (5am cutoff): {tz_date_str}")
-                            else:
-                                file_item.setToolTip(0, f"In {self.selected_timezone}: {tz_date_str} (same as original)")
+                            # Re-parse the date for this specific file to get the original date
+                            file_date, file_time = parse_date_and_time_from_filename(file)
+                            if file_date and file_time:
+                                original_date = file_date.strftime('%Y-%m-%d')
+                                if tz_date_str != original_date:
+                                    file_item.setToolTip(0, f"Original date: {original_date}\nIn {self.selected_timezone} (5am cutoff): {tz_date_str}")
+                                else:
+                                    file_item.setToolTip(0, f"In {self.selected_timezone}: {tz_date_str} (same as original)")
                 
                 # Then add merged output files
                 for output_file in sorted(output_files_by_date.get(date_str, [])):
