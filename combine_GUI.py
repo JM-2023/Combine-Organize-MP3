@@ -776,11 +776,11 @@ class GlassPanel(QWidget):
         
         # Glass effect background
         gradient = QLinearGradient(0, 0, 0, self.height())
-        gradient.setColorAt(0, QColor(255, 255, 255, 20))
-        gradient.setColorAt(1, QColor(255, 255, 255, 10))
+        gradient.setColorAt(0, QColor(255, 255, 255, 25))
+        gradient.setColorAt(1, QColor(255, 255, 255, 15))
         
         painter.setBrush(QBrush(gradient))
-        painter.setPen(QPen(QColor(255, 255, 255, 40), 1))
+        painter.setPen(QPen(QColor(232, 229, 224, 60), 1))
         painter.drawRoundedRect(self.rect(), 12, 12)
 
 # ----------------------------
@@ -1107,7 +1107,7 @@ class ColoredItemDelegate(QStyledItemDelegate):
             
             # If selected, draw a semi-transparent selection overlay
             if option.state & QtWidgets.QStyle.State_Selected:
-                painter.fillRect(option.rect, QColor(0, 122, 255, 30))
+                painter.fillRect(option.rect, QColor(220, 154, 98, 30))
             
             # Restore painter state
             painter.restore()
@@ -1169,7 +1169,7 @@ class MainWindow(QtWidgets.QMainWindow):
             titleFont = QtGui.QFont("Ubuntu", 32, QtGui.QFont.Bold)
         titleLabel.setFont(titleFont)
         titleLabel.setAlignment(Qt.AlignCenter)
-        titleLabel.setStyleSheet("color: #1a1a1a; margin: 0px;")
+        titleLabel.setStyleSheet("color: #1A1613; margin: 0px;")
         headerLayout.addWidget(titleLabel)
         
         # Subtitle
@@ -1181,7 +1181,7 @@ class MainWindow(QtWidgets.QMainWindow):
             subtitleFont = QtGui.QFont("Ubuntu", 14)
         subtitleLabel.setFont(subtitleFont)
         subtitleLabel.setAlignment(Qt.AlignCenter)
-        subtitleLabel.setStyleSheet("color: #666666; margin-top: 5px;")
+        subtitleLabel.setStyleSheet("color: #706B64; margin-top: 5px;")
         headerLayout.addWidget(subtitleLabel)
         
         mainLayout.addWidget(headerWidget)
@@ -1208,7 +1208,7 @@ class MainWindow(QtWidgets.QMainWindow):
         tree_shadow.setBlurRadius(15)
         tree_shadow.setXOffset(0)
         tree_shadow.setYOffset(2)
-        tree_shadow.setColor(QColor(0, 0, 0, 30))
+        tree_shadow.setColor(QColor(26, 22, 19, 30))
         self.treeWidget.setGraphicsEffect(tree_shadow)
         
         contentLayout.addWidget(self.treeWidget, 1)
@@ -1306,7 +1306,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # CPU info
         cpu_cores = os.cpu_count() or 'N/A'
         cpuLabel = QtWidgets.QLabel(f"🖥️ {cpu_cores} cores")
-        cpuLabel.setStyleSheet("color: #666666; font-size: 11pt;")
+        cpuLabel.setStyleSheet("color: #706B64; font-size: 11pt;")
         layout.addRow("CPU:", cpuLabel)
         
         # Timezone selector
@@ -1363,27 +1363,27 @@ class MainWindow(QtWidgets.QMainWindow):
         return widget
 
     def applyModernStyles(self):
-        # Modern, clean stylesheet optimized for macOS and cross-platform
+        # Modern, clean stylesheet with Claude's color scheme
         style = """
         QWidget {
             font-family: "SF Pro Display", "Helvetica Neue", "Segoe UI", "Ubuntu", Arial, sans-serif;
             font-size: 13px;
-            background-color: #f5f5f7;
-            color: #1d1d1f;
+            background-color: #FAFAF8;
+            color: #1A1613;
         }
         
         QMainWindow {
-            background-color: #f5f5f7;
+            background-color: #FAFAF8;
         }
         
         /* Group Boxes */
         QGroupBox {
             font-weight: 600;
             font-size: 15px;
-            border: 1px solid #d2d2d7;
+            border: 1px solid #E8E5E0;
             border-radius: 12px;
             margin-top: 12px;
-            background-color: transparent;
+            background-color: #FFFFFF;
             padding: 20px 15px 15px 15px;
         }
         
@@ -1391,15 +1391,14 @@ class MainWindow(QtWidgets.QMainWindow):
             subcontrol-origin: margin;
             subcontrol-position: top left;
             padding: 0 10px 5px 10px;
-            color: #1d1d1f;
+            color: #1A1613;
             left: 15px;
             top: -2px;
         }
         
         /* Modern Buttons */
         QPushButton, ModernButton {
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                stop:0 #007AFF, stop:1 #0051D5);
+            background-color: #DC9A62;
             color: white;
             border: none;
             padding: 10px 20px;
@@ -1410,24 +1409,22 @@ class MainWindow(QtWidgets.QMainWindow):
         }
         
         QPushButton:hover, ModernButton:hover {
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                stop:0 #0088FF, stop:1 #0066FF);
+            background-color: #D08752;
         }
         
         QPushButton:pressed, ModernButton:pressed {
-            background-color: qlineargradient(x1:0, y1:0, x2:0, y2:1, 
-                stop:0 #0051D5, stop:1 #003D9E);
+            background-color: #C47842;
         }
         
         QPushButton:disabled, ModernButton:disabled {
-            background-color: #e5e5e7;
-            color: #8e8e93;
+            background-color: #E8E5E0;
+            color: #B4AFA8;
         }
         
         /* Tree Widget */
         QTreeWidget {
-            background-color: white;
-            border: 1px solid #d2d2d7;
+            background-color: #FFFFFF;
+            border: 1px solid #E8E5E0;
             border-radius: 10px;
             outline: none;
             font-size: 13px;
@@ -1437,71 +1434,73 @@ class MainWindow(QtWidgets.QMainWindow):
         QTreeWidget::item {
             padding: 8px 5px;
             border-radius: 6px;
+            color: #1A1613;
         }
         
         QTreeWidget::item:selected {
-            background-color: rgba(0, 122, 255, 0.1);
-            color: #1d1d1f;
+            background-color: rgba(220, 154, 98, 0.2);
+            color: #1A1613;
         }
         
         QTreeWidget::item:hover {
-            background-color: rgba(0, 0, 0, 0.03);
+            background-color: rgba(220, 154, 98, 0.1);
         }
         
         QTreeWidget::item:disabled {
-            color: #969696;
+            color: #B4AFA8;
         }
         
         QHeaderView::section {
-            background-color: #f5f5f7;
+            background-color: #FAFAF8;
             padding: 8px;
             border: none;
-            border-bottom: 1px solid #d2d2d7;
+            border-bottom: 1px solid #E8E5E0;
             font-weight: 600;
-            color: #1d1d1f;
+            color: #1A1613;
         }
         
         /* Progress Bar */
         QProgressBar {
             border: none;
             border-radius: 4px;
-            background-color: #e5e5e7;
+            background-color: #E8E5E0;
             height: 8px;
         }
         
         QProgressBar::chunk {
-            background-color: qlineargradient(x1:0, y1:0, x2:1, y2:0,
-                stop:0 #34C759, stop:1 #30D158);
+            background-color: #DC9A62;
             border-radius: 4px;
         }
         
         /* Spin Box */
         QSpinBox {
             padding: 6px 10px;
-            border: 1px solid #d2d2d7;
+            border: 1px solid #E8E5E0;
             border-radius: 6px;
-            background-color: white;
+            background-color: #FFFFFF;
             min-width: 80px;
             font-size: 13px;
+            color: #1A1613;
         }
         
         QSpinBox:focus {
-            border-color: #007AFF;
+            border-color: #DC9A62;
             outline: none;
         }
         
         /* Combo Box */
         QComboBox {
             padding: 6px 10px;
-            border: 1px solid #d2d2d7;
+            border: 1px solid #E8E5E0;
             border-radius: 6px;
-            background-color: white;
+            background-color: #FFFFFF;
             min-width: 120px;
             font-size: 13px;
+            color: #1A1613;
         }
         
         QComboBox:focus {
-            border-color: #007AFF;
+            border-color: #DC9A62;
             outline: none;
         }
         
@@ -1516,7 +1515,7 @@ class MainWindow(QtWidgets.QMainWindow):
             height: 0;
             border-left: 4px solid transparent;
             border-right: 4px solid transparent;
-            border-top: 6px solid #8e8e93;
+            border-top: 6px solid #706B64;
         }
         
         QSpinBox::up-button, QSpinBox::down-button {
@@ -1531,7 +1530,7 @@ class MainWindow(QtWidgets.QMainWindow):
             height: 0;
             border-left: 4px solid transparent;
             border-right: 4px solid transparent;
-            border-bottom: 4px solid #8e8e93;
+            border-bottom: 4px solid #706B64;
         }
         
         QSpinBox::down-arrow {
@@ -1540,19 +1539,19 @@ class MainWindow(QtWidgets.QMainWindow):
             height: 0;
             border-left: 4px solid transparent;
             border-right: 4px solid transparent;
-            border-top: 4px solid #8e8e93;
+            border-top: 4px solid #706B64;
         }
         
         /* Labels */
         QLabel {
-            color: #1d1d1f;
+            color: #1A1613;
         }
         
         /* Status Label */
         QLabel#statusLabel {
             font-size: 14px;
             font-weight: 500;
-            color: #8e8e93;
+            color: #706B64;
             background-color: rgba(255, 255, 255, 0.8);
             border-radius: 6px;
             padding: 5px;
@@ -1563,15 +1562,15 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # Apply custom palette for better integration
         palette = QPalette()
-        palette.setColor(QPalette.Window, QColor(245, 245, 247))
-        palette.setColor(QPalette.WindowText, QColor(29, 29, 31))
-        palette.setColor(QPalette.Base, QColor(255, 255, 255))
-        palette.setColor(QPalette.AlternateBase, QColor(250, 250, 250))
-        palette.setColor(QPalette.Text, QColor(29, 29, 31))
-        palette.setColor(QPalette.Button, QColor(0, 122, 255))
-        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))
-        palette.setColor(QPalette.Highlight, QColor(0, 122, 255))
-        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))
+        palette.setColor(QPalette.Window, QColor(250, 250, 248))  # #FAFAF8
+        palette.setColor(QPalette.WindowText, QColor(26, 22, 19))  # #1A1613
+        palette.setColor(QPalette.Base, QColor(255, 255, 255))  # #FFFFFF
+        palette.setColor(QPalette.AlternateBase, QColor(250, 250, 248))  # #FAFAF8
+        palette.setColor(QPalette.Text, QColor(26, 22, 19))  # #1A1613
+        palette.setColor(QPalette.Button, QColor(220, 154, 98))  # #DC9A62
+        palette.setColor(QPalette.ButtonText, QColor(255, 255, 255))  # #FFFFFF
+        palette.setColor(QPalette.Highlight, QColor(220, 154, 98))  # #DC9A62
+        palette.setColor(QPalette.HighlightedText, QColor(255, 255, 255))  # #FFFFFF
         self.setPalette(palette)
 
     # All the existing methods remain the same
