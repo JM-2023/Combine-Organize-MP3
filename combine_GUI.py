@@ -239,6 +239,36 @@ def parse_time_from_filename(filename):
     return datetime.min # Return earliest possible datetime if parsing fails
 
 # ----------------------------
+# Helper function to truncate long filenames for display
+# ----------------------------
+def truncate_filename(filename, max_length=40):
+    """
+    Truncate long filenames for display purposes.
+    Keeps the beginning and end of the filename with extension visible.
+    """
+    if len(filename) <= max_length:
+        return filename
+    
+    # Split name and extension
+    name, ext = os.path.splitext(filename)
+    
+    # Calculate how much we can show from the beginning and end
+    # Reserve 3 chars for "..." and length of extension
+    available = max_length - 3 - len(ext)
+    if available <= 0:
+        # If even the extension is too long, just truncate brutally
+        return filename[:max_length-3] + "..."
+    
+    # Show more of the beginning than the end
+    start_chars = (available * 2) // 3
+    end_chars = available - start_chars
+    
+    if end_chars > 0:
+        return name[:start_chars] + "..." + name[-end_chars:] + ext
+    else:
+        return name[:start_chars] + "..." + ext
+
+# ----------------------------
 # Merging Function for MP3 Files (uses MoviePy)
 # ----------------------------
 def process_files(files, output_dir_path, progress_callback=None):
@@ -405,7 +435,7 @@ def convert_mp4_to_mp3(args):
     if not os.path.exists(video_path):
         logging.error(f"File not found, cannot convert: {video_path}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: File not found {video_file}")
+            progress_callback(f"Error {index+1}/{total}: File not found {truncate_filename(video_file)}")
         return False, video_file
 
     # FFmpeg availability should be checked by the calling worker (ConvertWorker)
@@ -435,7 +465,7 @@ def convert_mp4_to_mp3(args):
         if result.returncode == 0:
             logging.info(f"FFmpeg successfully converted {video_file} to {output_path}")
             if progress_callback:
-                progress_callback(f"Converted {index+1}/{total}: {video_file} -> {audio_file} (FFmpeg)")
+                progress_callback(f"Converted {index+1}/{total}: {truncate_filename(video_file)} -> {truncate_filename(audio_file)} (FFmpeg)")
             return True, video_file
         else:
             logging.error(f"FFmpeg failed to convert '{video_file}'. Return code: {result.returncode}")
@@ -443,7 +473,7 @@ def convert_mp4_to_mp3(args):
             logging.error(f"FFmpeg stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
             logging.error(f"FFmpeg stderr: {result.stderr.strip() if result.stderr else 'N/A'}")
             if progress_callback:
-                progress_callback(f"Error {index+1}/{total}: FFmpeg conversion failed for {video_file}")
+                progress_callback(f"Error {index+1}/{total}: FFmpeg conversion failed for {truncate_filename(video_file)}")
             if os.path.exists(output_path): # Clean up potentially partial file
                 try: os.remove(output_path)
                 except OSError as rm_err: logging.warning(f"Could not delete failed FFmpeg output file {output_path}: {rm_err}")
@@ -451,12 +481,12 @@ def convert_mp4_to_mp3(args):
     except FileNotFoundError:
         logging.error(f"FFmpeg executable not found at '{PATH_TO_FFMPEG}' when trying to convert {video_file}.\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: FFmpeg not found at '{PATH_TO_FFMPEG}' for {video_file}")
+            progress_callback(f"Error {index+1}/{total}: FFmpeg not found at '{PATH_TO_FFMPEG}' for {truncate_filename(video_file)}")
         return False, video_file
     except Exception as e_ffmpeg_execution:
         logging.error(f"Error during FFmpeg execution for {video_file}: {e_ffmpeg_execution}\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: FFmpeg execution crashed for {video_file}")
+            progress_callback(f"Error {index+1}/{total}: FFmpeg execution crashed for {truncate_filename(video_file)}")
         return False, video_file
 
 # ----------------------------
@@ -469,7 +499,7 @@ def remove_silence_from_file(args):
         if not os.path.exists(input_file_path):
             logging.error(f"File not found, cannot remove silence: {input_file_path}")
             if progress_callback:
-                progress_callback(f"Error {index+1}/{total}: File not found {file}")
+                progress_callback(f"Error {index+1}/{total}: File not found {truncate_filename(file)}")
             return False, file
 
         base, ext = os.path.splitext(file)
@@ -498,25 +528,25 @@ def remove_silence_from_file(args):
             logging.error(f"FFmpeg stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
             logging.error(f"FFmpeg stderr: {result.stderr.strip() if result.stderr else 'N/A'}")
             if progress_callback:
-                progress_callback(f"Error {index+1}/{total}: Processing failed {file}")
+                progress_callback(f"Error {index+1}/{total}: Processing failed {truncate_filename(file)}")
             if os.path.exists(output_file_path):
                 try: os.remove(output_file_path)
                 except OSError as rm_err: logging.warning(f"Could not delete failed output file {output_file_path}: {rm_err}")
             return False, file
         else:
             if progress_callback:
-                progress_callback(f"Processed {index+1}/{total}: {file} -> {output_filename}")
+                progress_callback(f"Processed {index+1}/{total}: {truncate_filename(file)} -> {truncate_filename(output_filename)}")
             logging.info(f"Successfully removed silence from {file}, output as {output_filename}")
             return True, file
     except FileNotFoundError: # Specifically catch if PATH_TO_FFMPEG itself isn't found
         logging.error(f"FFmpeg executable not found at '{PATH_TO_FFMPEG}' when trying to remove silence from {file}.\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: FFmpeg not found at '{PATH_TO_FFMPEG}' for {file}")
+            progress_callback(f"Error {index+1}/{total}: FFmpeg not found at '{PATH_TO_FFMPEG}' for {truncate_filename(file)}")
         return False, file
     except Exception as e:
         logging.error(f"Unexpected error removing silence from {file}: {e}\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: Unexpected failure {file}")
+            progress_callback(f"Error {index+1}/{total}: Unexpected failure {truncate_filename(file)}")
         return False, file
 
 # ----------------------------
@@ -636,7 +666,7 @@ def import_obs_recordings(source_dir, dest_dir, progress_callback=None):
                 if os.path.getsize(source_path) == os.path.getsize(dest_path):
                     skipped_files.append(file)
                     if progress_callback:
-                        progress_callback(f"Skipping {i+1}/{total_files}: {file} (already exists)")
+                        progress_callback(f"Skipping {i+1}/{total_files}: {truncate_filename(file)} (already exists)")
                     continue
                 else:
                     # File exists but different size, rename the new one
@@ -651,12 +681,12 @@ def import_obs_recordings(source_dir, dest_dir, progress_callback=None):
                 shutil.move(source_path, dest_path)
                 moved_files.append(file)
                 if progress_callback:
-                    progress_callback(f"Moved {i+1}/{total_files}: {file}")
+                    progress_callback(f"Moved {i+1}/{total_files}: {truncate_filename(file)}")
                 logging.info(f"Moved: {file}")
             except Exception as e:
                 logging.error(f"Failed to move {file}: {e}")
                 if progress_callback:
-                    progress_callback(f"Error moving {file}: {str(e)}")
+                    progress_callback(f"Error moving {truncate_filename(file)}: {str(e)}")
         
         success_msg = f"Import complete: {len(moved_files)} files moved"
         if skipped_files:
@@ -680,7 +710,7 @@ def create_zip_archive(args):
         if not os.path.isdir(folder_path):
             logging.error(f"Source folder not found, cannot create ZIP: {folder_path}")
             if progress_callback:
-                progress_callback(f"Error {index+1}/{total}: Folder not found {folder_name}")
+                progress_callback(f"Error {index+1}/{total}: Folder not found {truncate_filename(folder_name)}")
             return folder_name, False
 
         zip_name = f"{folder_name}.zip"
@@ -703,7 +733,7 @@ def create_zip_archive(args):
                  else:
                     logging.error(f"7-Zip executable not found or not executable at '{path_to_7zip_exe_arg}' or global '{PATH_TO_7ZIP}'. Cannot create ZIP for {folder_name}.")
                     if progress_callback:
-                        progress_callback(f"Error {index+1}/{total}: 7-Zip not found for {folder_name}")
+                        progress_callback(f"Error {index+1}/{total}: 7-Zip not found for {truncate_filename(folder_name)}")
                     return folder_name, False
         
         zip_command = [
@@ -725,10 +755,10 @@ def create_zip_archive(args):
         success = result.returncode == 0
         if progress_callback:
             if success:
-                progress_callback(f"Created ZIP {index+1}/{total}: {zip_name}")
+                progress_callback(f"Created ZIP {index+1}/{total}: {truncate_filename(zip_name)}")
                 logging.info(f"Successfully created ZIP archive: {zip_name}")
             else:
-                progress_callback(f"Failed to create ZIP {index+1}/{total}: {zip_name}")
+                progress_callback(f"Failed to create ZIP {index+1}/{total}: {truncate_filename(zip_name)}")
                 logging.error(f"Failed to create ZIP archive '{zip_name}'. Return code: {result.returncode}")
                 logging.error(f"7-Zip command: {' '.join(zip_command)}")
                 logging.error(f"7-Zip stdout: {result.stdout.strip() if result.stdout else 'N/A'}")
@@ -738,12 +768,12 @@ def create_zip_archive(args):
     except FileNotFoundError: # Specifically for the 7zip executable itself
         logging.error(f"7-Zip executable not found when trying to create ZIP for {folder_name}.\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: 7-Zip executable not found for {folder_name}")
+            progress_callback(f"Error {index+1}/{total}: 7-Zip executable not found for {truncate_filename(folder_name)}")
         return folder_name, False
     except Exception as e:
         logging.error(f"Unexpected error creating ZIP for {folder_name}: {e}\n{traceback.format_exc()}")
         if progress_callback:
-            progress_callback(f"Error {index+1}/{total}: Failed creating ZIP {folder_name}")
+            progress_callback(f"Error {index+1}/{total}: Failed creating ZIP {truncate_filename(folder_name)}")
         return folder_name, False
 
 # ----------------------------
@@ -857,7 +887,7 @@ class ConvertWorker(QtCore.QObject): # Uses FFmpeg via convert_mp4_to_mp3
                             successful_count += 1
                     except Exception as e:
                         logging.error(f"Error processing future for MP4 conversion of file {original_file_arg}: {e}\n{traceback.format_exc()}")
-                        self.progress.emit(f"Error during conversion task for: {original_file_arg}")
+                        self.progress.emit(f"Error during conversion task for: {truncate_filename(original_file_arg)}")
             
             final_message = f"FFmpeg conversion complete. Successfully converted {successful_count}/{processed_count} files."
             if processed_count < total_files:
@@ -921,7 +951,7 @@ class RemoveSilenceWorker(QtCore.QObject): # Uses FFmpeg
                             successful_count += 1
                     except Exception as e:
                         logging.error(f"Error processing future for silence removal of file {original_file_arg}: {e}\n{traceback.format_exc()}")
-                        self.progress.emit(f"Error during silence removal task for: {original_file_arg}")
+                        self.progress.emit(f"Error during silence removal task for: {truncate_filename(original_file_arg)}")
             
             final_message = f"Silence removal complete. Successfully processed {successful_count}/{processed_count} files."
             if processed_count < total_files:
@@ -1127,6 +1157,7 @@ class MainWindow(QtWidgets.QMainWindow):
         super().__init__()
         self.setWindowTitle("Audio Toolbox Pro")
         self.resize(1100, 800)
+        self.setMaximumWidth(1400)  # Prevent window from stretching too wide
         self.merged_files = set()  # Set of files that were used in merges
         self.output_files = {}  # Dict mapping output files to their source files
         self.current_workers = 0
@@ -1358,6 +1389,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.statusLabel = QtWidgets.QLabel("✓ Ready")
         self.statusLabel.setAlignment(Qt.AlignCenter)
         self.statusLabel.setMinimumHeight(30)
+        self.statusLabel.setWordWrap(True)  # Enable word wrapping for long text
+        self.statusLabel.setSizePolicy(QtWidgets.QSizePolicy.Preferred, QtWidgets.QSizePolicy.Preferred)
+        # Set text interaction to allow text selection if needed
+        self.statusLabel.setTextInteractionFlags(Qt.TextSelectableByMouse)
         layout.addWidget(self.statusLabel)
         
         return widget
