@@ -1,4 +1,4 @@
-4. **No special cases** - Single dispatcher for all operations
+- **No special cases** - Single dispatcher for all operations
 - **Clean data structures** - Proper models instead of string manipulation
 - **Clear separation** - GUI, business logic, and external tools are separate
 - **No global state** - Configuration passed explicitly
