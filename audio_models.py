@@ -17,6 +17,7 @@ class FileState(Enum):
     PROCESSED = auto()
     CONVERTED = auto()  # MP4 converted to MP3
     MERGED = auto()
+    MERGED_OUTPUT = auto()  # Output file from merge operation
     FAILED = auto()
 
 

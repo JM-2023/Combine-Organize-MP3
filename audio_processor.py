@@ -39,6 +39,9 @@ class AudioProcessor:
         self.date_pattern = re.compile(
             self.config.get('date_pattern', r'(\d{4}-\d{2}-\d{2})[_ ](\d{2}-\d{2}(?:-\d{2})?)')
         )
+        
+        # Pattern for merged output files: YYYYMMDD HH-MM.mp3
+        self.merged_output_pattern = re.compile(r'^(\d{8}) (\d{2}-\d{2})\.mp3$')
     
     def find_obs_save_location(self) -> Optional[Path]:
         """Find OBS default save location on macOS"""
@@ -83,7 +86,20 @@ class AudioProcessor:
     def _create_audio_file(self, path: Path) -> Optional[AudioFile]:
         """Create AudioFile from path, extracting metadata"""
         try:
-            # Extract timestamp from filename
+            # Check if this is a merged output file
+            merged_match = self.merged_output_pattern.match(path.name)
+            if merged_match:
+                # Parse merged output filename: YYYYMMDD HH-MM.mp3
+                date_str = merged_match.group(1)
+                time_str = merged_match.group(2).replace('-', ':')
+                timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y%m%d %H:%M")
+                
+                audio_file = AudioFile.from_path(path, timestamp)
+                # Mark as merged output
+                audio_file.state = FileState.MERGED_OUTPUT
+                return audio_file
+            
+            # Extract timestamp from regular filename
             match = self.date_pattern.search(path.name)
             if match:
                 date_str = match.group(1)
@@ -220,10 +236,10 @@ class AudioProcessor:
         # Sort files chronologically
         sorted_files = sorted(task.files, key=lambda f: f.timestamp)
         
-        # Generate output filename from first and last timestamps
+        # Generate output filename: YYYYMMDD HH-MM.mp3
+        # Use the date and start time from the first file
         first_time = sorted_files[0].timestamp
-        last_time = sorted_files[-1].timestamp
-        output_name = f"merged_{first_time.strftime('%Y%m%d_%H%M%S')}_to_{last_time.strftime('%H%M%S')}.mp3"
+        output_name = f"{first_time.strftime('%Y%m%d %H-%M')}.mp3"
         output_path = task.output_dir / output_name
         
         if progress_callback:
@@ -288,38 +304,74 @@ class AudioProcessor:
     
     def _organize_files(self, task: ProcessingTask,
                        progress_callback: Optional[Callable] = None) -> TaskResult:
-        """Organize files by date and create archives"""
+        """Organize source files by date into folders and optionally create archives"""
         organized_dirs = []
+        moved_count = 0
         
-        # Group files by date
-        files_by_date = {}
+        # Filter out merged output files - only organize source files
+        source_files = []
         for audio_file in task.files:
+            # Skip merged output files (format: YYYYMMDD HH-MM.mp3)
+            if self.merged_output_pattern.match(audio_file.path.name):
+                if progress_callback:
+                    progress_callback(f"Skipping merged output: {audio_file.basename}")
+                continue
+            # Skip files that are already marked as merged output
+            if audio_file.state == FileState.MERGED_OUTPUT:
+                continue
+            source_files.append(audio_file)
+        
+        if not source_files:
+            return TaskResult(
+                task=task,
+                success=False,
+                error="No source files to organize (only merged outputs found)"
+            )
+        
+        # Group source files by date (using filename date, 0:00 cutoff)
+        files_by_date = {}
+        for audio_file in source_files:
+            # Use date_key which is based on filename date
             date_key = audio_file.date_key
             if date_key not in files_by_date:
                 files_by_date[date_key] = []
             files_by_date[date_key].append(audio_file)
         
-        # Create directories and move files
-        for date_key, files in files_by_date.items():
-            date_dir = task.output_dir / date_key
-            date_dir.mkdir(parents=True, exist_ok=True)
+        # Process each date group
+        for date_key, files in sorted(files_by_date.items()):
+            # Sort files chronologically
+            sorted_files = sorted(files, key=lambda f: f.timestamp)
             
-            for audio_file in files:
+            # Create directory with format: YYYYMMDD HH-MM (using first file's time)
+            if sorted_files:
+                first_time = sorted_files[0].timestamp
+                folder_name = f"{first_time.strftime('%Y%m%d %H-%M')}"
+                date_dir = task.output_dir / folder_name
+                date_dir.mkdir(parents=True, exist_ok=True)
+            else:
+                continue
+            
+            # Move all source files to the date directory
+            for file in sorted_files:
                 try:
-                    dest = date_dir / audio_file.path.name
-                    audio_file.path.rename(dest)
-                    audio_file.path = dest  # Update path in model
+                    dest = date_dir / file.path.name
+                    if progress_callback:
+                        progress_callback(f"Moving {file.basename} to {folder_name}/")
+                    file.path.rename(dest)
+                    file.path = dest  # Update path in model
+                    moved_count += 1
                 except Exception as e:
-                    logging.error(f"Failed to move {audio_file.path}: {e}")
+                    logging.error(f"Failed to move {file.path}: {e}")
+            
+            if progress_callback:
+                progress_callback(f"Organized {len(sorted_files)} files in {folder_name}/")
             
             organized_dirs.append(date_dir)
             
-            if progress_callback:
-                progress_callback(f"Organized {len(files)} files for {date_key}")
-            
-            # Create archive if requested
+            # Create archive if requested  
             if task.params.get('create_archive', False) and self.tools.has_sevenzip:
-                archive_path = task.output_dir / f"{date_key}.7z"
+                # Use folder name for archive
+                archive_path = task.output_dir / f"{folder_name}.7z"
                 if self.tools.create_archive(date_dir, archive_path):
                     if progress_callback:
                         progress_callback(f"Created archive: {archive_path.name}")
@@ -328,7 +380,7 @@ class AudioProcessor:
             task=task,
             success=len(organized_dirs) > 0,
             output_files=organized_dirs,
-            processed_count=len(task.files)
+            processed_count=moved_count
         )
     
     def create_merge_task_for_date(self, date_str: str, output_dir: Path = None) -> Optional[ProcessingTask]:

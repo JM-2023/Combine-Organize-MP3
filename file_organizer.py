@@ -17,7 +17,7 @@ from audio_models import AudioFile, FileState
 class TimeZoneAdapter:
     """Handles all timezone-related logic in one place"""
     
-    def __init__(self, timezone: str = 'UTC', cutoff_hour: int = 5):
+    def __init__(self, timezone: str = 'UTC', cutoff_hour: int = 4):
         """
         Args:
             timezone: Target timezone for adjustment
@@ -32,12 +32,12 @@ class TimeZoneAdapter:
         Get timezone-adjusted date with cutoff logic.
         Files before cutoff_hour belong to the previous day.
         """
-        # Get local timezone
-        local_tz = datetime.now().astimezone().tzinfo
+        # Assume input datetime is in Beijing timezone
+        beijing_tz = pytz.timezone('Asia/Shanghai')
         
-        # Make datetime timezone-aware
+        # If datetime is naive, localize it to Beijing timezone
         if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=local_tz)
+            dt = beijing_tz.localize(dt)
         
         # Convert to target timezone
         tz_dt = dt.astimezone(self._tz)
@@ -105,41 +105,40 @@ class FileOrganizer:
         Group files by date and assign colors.
         Returns groups sorted chronologically.
         """
-        # Group by original date
-        date_groups = {}
-        for file in files:
-            date_key = file.date_key
-            if date_key not in date_groups:
-                date_groups[date_key] = []
-            date_groups[date_key].append(file)
-        
-        # Get timezone-adjusted dates for unmerged files
+        # Get timezone-adjusted dates for ALL files to determine grouping and colors
         adjusted_dates = {}
+        adjusted_groups = {}
+        
         for file in files:
-            if file.state == FileState.UNPROCESSED:
-                adjusted_dates[file.path] = self.timezone_adapter.get_adjusted_date(file.timestamp)
+            # Calculate adjusted date for this file
+            adjusted_date = self.timezone_adapter.get_adjusted_date(file.timestamp)
+            adjusted_dates[file.path] = adjusted_date
+            
+            # Group by adjusted date
+            adjusted_date_key = adjusted_date.strftime("%Y-%m-%d")
+            if adjusted_date_key not in adjusted_groups:
+                adjusted_groups[adjusted_date_key] = []
+            adjusted_groups[adjusted_date_key].append(file)
         
         # Assign colors based on unique adjusted dates
-        unique_days = set(adjusted_dates.values())
-        sorted_days = sorted(unique_days)
+        unique_days = sorted(set(adjusted_dates.values()))
         day_colors = {day: self.colors[i % len(self.colors)] 
-                      for i, day in enumerate(sorted_days)}
+                      for i, day in enumerate(unique_days)}
         
-        # Create FileGroup objects
+        # Create FileGroup objects grouped by adjusted date
         groups = []
-        for date_key in sorted(date_groups.keys()):
-            files_in_group = sorted(date_groups[date_key], key=lambda f: f.timestamp)
+        for adjusted_date_key in sorted(adjusted_groups.keys()):
+            files_in_group = sorted(adjusted_groups[adjusted_date_key], key=lambda f: f.timestamp)
             
-            # Determine group color (from first unmerged file)
-            group_color = None
-            for file in files_in_group:
-                if file.path in adjusted_dates:
-                    group_color = day_colors.get(adjusted_dates[file.path])
-                    break
+            # Get the adjusted date for this group
+            display_date = datetime.strptime(adjusted_date_key, "%Y-%m-%d").date()
+            
+            # Get color for this adjusted date
+            group_color = day_colors.get(display_date)
             
             groups.append(FileGroup(
-                date_key=date_key,
-                display_date=datetime.strptime(date_key, "%Y-%m-%d").date(),
+                date_key=adjusted_date_key,
+                display_date=display_date,
                 files=files_in_group,
                 color=group_color
             ))
@@ -166,7 +165,7 @@ class FileOrganizer:
             'icon': self._get_file_icon(file),
             'suffix': self._get_file_suffix(file),
             'selectable': file.state in [FileState.UNPROCESSED, FileState.PROCESSED],
-            'disabled': file.state in [FileState.MERGED, FileState.CONVERTED],
+            'disabled': file.state in [FileState.MERGED, FileState.CONVERTED, FileState.MERGED_OUTPUT],
         }
         
         # Add timezone info if needed
@@ -179,12 +178,16 @@ class FileOrganizer:
                                      f"({self.timezone_adapter.cutoff_hour}am cutoff)")
             else:
                 metadata['tooltip'] = f"Date in {self.timezone_adapter.timezone}: {adjusted}"
+        elif file.state == FileState.MERGED_OUTPUT:
+            metadata['tooltip'] = "Merged output file - contains multiple recordings combined"
         
         return metadata
     
     def _get_file_icon(self, file: AudioFile) -> str:
         """Determine icon for file based on state and type"""
-        if file.is_video:
+        if file.state == FileState.MERGED_OUTPUT:
+            return "📦"  # Package icon for merged output
+        elif file.is_video:
             return "🎬"
         elif file.state == FileState.MERGED:
             return "🔒"
@@ -196,7 +199,9 @@ class FileOrganizer:
     
     def _get_file_suffix(self, file: AudioFile) -> str:
         """Determine suffix text for file"""
-        if file.source_file:
+        if file.state == FileState.MERGED_OUTPUT:
+            return " [OUTPUT]"
+        elif file.source_file:
             return " [CONVERTED]"
         elif file.state == FileState.MERGED:
             return " [MERGED]"

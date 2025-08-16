@@ -67,10 +67,14 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self.config = config or {}
         self.processor = AudioProcessor(config)
         self.current_thread = None
-        self.selected_timezone = self.config.get('default_timezone', 'UTC')
+        self.selected_timezone = self.config.get('default_timezone', 'Asia/Shanghai')
         
         # File organization handler
         self.organizer = FileOrganizer(self.selected_timezone)
+        
+        # Track merged and output files
+        self.merged_files = set()
+        self.output_files = {}
         
         self.init_ui()
         self.refresh_files()
@@ -168,7 +172,7 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self.timezone_combo = QtWidgets.QComboBox()
         common_timezones = [
             "UTC", "US/Eastern", "US/Central", "US/Mountain", "US/Pacific",
-            "Europe/London", "Europe/Paris", "Europe/Berlin",
+            "Europe/London", "Europe/Paris", "Europe/Berlin", "Europe/Copenhagen",
             "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney"
         ]
         self.timezone_combo.addItems(common_timezones)
@@ -202,6 +206,17 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
     def refresh_files(self):
         """Refresh file list from processor"""
         self.processor.scan_directory()
+        
+        # Restore states for tracked files
+        for file in self.processor.library.files:
+            # Restore merged state for source files
+            if file.path in self.merged_files:
+                self.processor.library.update_state(file, FileState.MERGED)
+            
+            # Mark files that are outputs from merge operations
+            if file.path in self.output_files:
+                self.processor.library.update_state(file, FileState.MERGED_OUTPUT)
+        
         self.update_file_tree()
     
     def update_file_tree(self):
@@ -218,7 +233,14 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
     
     def _render_group(self, group: FileGroup):
         """Render a single file group in the tree"""
-        date_item = QtWidgets.QTreeWidgetItem([f"📅 {group.date_key}"])
+        # Show the adjusted date in the group header
+        date_display = f"📅 {group.date_key}"
+        
+        # Add timezone info if not Beijing
+        if self.selected_timezone != 'Asia/Shanghai':
+            date_display += f" ({self.selected_timezone})"
+        
+        date_item = QtWidgets.QTreeWidgetItem([date_display])
         self.file_tree.addTopLevelItem(date_item)
         
         for file in group.files:
@@ -250,14 +272,31 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         if metadata['selectable']:
             file_item.setCheckState(0, Qt.Unchecked)
         
-        # Disable if needed
+        # Disable if needed (merged, converted, or output files)
         if metadata['disabled']:
             file_item.setDisabled(True)
-            for col in range(file_item.columnCount()):
-                file_item.setForeground(col, QtGui.QBrush(QColor(150, 150, 150)))
+            # Use different colors for different disabled states
+            if file.state == FileState.MERGED:
+                # Darker gray for merged files with strikethrough effect
+                for col in range(file_item.columnCount()):
+                    file_item.setForeground(col, QtGui.QBrush(QColor(100, 100, 100)))
+                    font = file_item.font(col)
+                    font.setStrikeOut(True)
+                    file_item.setFont(col, font)
+            elif file.state == FileState.MERGED_OUTPUT:
+                # Green tint for merged output files
+                for col in range(file_item.columnCount()):
+                    file_item.setForeground(col, QtGui.QBrush(QColor(40, 120, 40)))
+                    font = file_item.font(col)
+                    font.setBold(True)
+                    file_item.setFont(col, font)
+            else:
+                # Light gray for converted files
+                for col in range(file_item.columnCount()):
+                    file_item.setForeground(col, QtGui.QBrush(QColor(150, 150, 150)))
         
-        # Apply color if file is unprocessed
-        if file.state == FileState.UNPROCESSED and group.color:
+        # Apply color based on adjusted date (for all files in the group)
+        if group.color:
             file_item.setData(0, Qt.UserRole + 2, group.color)
         
         # Add tooltip if provided
@@ -278,7 +317,8 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
                 if (file_item.checkState(0) == Qt.Checked and 
                     not file_item.isDisabled()):
                     file = file_item.data(0, Qt.UserRole)
-                    if file:
+                    # Double-check that file is not merged, converted, or output
+                    if file and file.state not in [FileState.MERGED, FileState.CONVERTED, FileState.MERGED_OUTPUT]:
                         selected.append(file)
         return selected
     
