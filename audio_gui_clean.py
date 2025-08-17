@@ -30,9 +30,9 @@ class ColoredItemDelegate(QStyledItemDelegate):
             painter.save()
             painter.fillRect(option.rect, QColor(color))
             
-            # Semi-transparent selection overlay
+            # Claude orange selection overlay
             if option.state & QStyle.State_Selected:
-                painter.fillRect(option.rect, QColor(220, 154, 98, 30))
+                painter.fillRect(option.rect, QColor(220, 136, 98, 40))
             
             painter.restore()
         
@@ -84,17 +84,161 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self.setWindowTitle("Audio Toolbox")
         self.setMinimumSize(1000, 700)
         
+        # Apply Claude's modern dark theme
+        self.setStyleSheet("""
+            QMainWindow {
+                background-color: #1a1a1a;
+            }
+            QWidget {
+                background-color: #1a1a1a;
+                color: #e0e0e0;
+                font-family: 'SF Pro Display', 'Segoe UI', Arial, sans-serif;
+                font-size: 14px;
+            }
+            QGroupBox {
+                background-color: #2a2a2a;
+                border: 1px solid #3a3a3a;
+                border-radius: 8px;
+                margin-top: 12px;
+                padding-top: 12px;
+                font-weight: 600;
+            }
+            QGroupBox::title {
+                color: #DC8862;
+                subcontrol-origin: margin;
+                left: 12px;
+                padding: 0 8px;
+            }
+            QPushButton {
+                background-color: #DC8862;
+                color: white;
+                border: none;
+                border-radius: 6px;
+                padding: 10px 16px;
+                font-weight: 500;
+                min-height: 20px;
+            }
+            QPushButton:hover {
+                background-color: #E59B7A;
+            }
+            QPushButton:pressed {
+                background-color: #C97550;
+            }
+            QTreeWidget {
+                background-color: #2a2a2a;
+                border: 1px solid #3a3a3a;
+                border-radius: 8px;
+                selection-background-color: #DC8862;
+                alternate-background-color: #252525;
+            }
+            QTreeWidget::item {
+                padding: 4px;
+                border-radius: 4px;
+            }
+            QTreeWidget::item:selected {
+                background-color: #DC8862;
+                color: white;
+            }
+            QTreeWidget::item:hover {
+                background-color: #3a3a3a;
+            }
+            QHeaderView::section {
+                background-color: #2a2a2a;
+                color: #DC8862;
+                padding: 8px;
+                border: none;
+                border-bottom: 2px solid #DC8862;
+                font-weight: 600;
+            }
+            QComboBox {
+                background-color: #2a2a2a;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 6px 12px;
+                min-width: 120px;
+            }
+            QComboBox:hover {
+                border-color: #DC8862;
+            }
+            QComboBox::drop-down {
+                border: none;
+            }
+            QComboBox::down-arrow {
+                image: none;
+                width: 12px;
+                height: 12px;
+                background-color: #DC8862;
+                border-radius: 2px;
+            }
+            QComboBox QAbstractItemView {
+                background-color: #2a2a2a;
+                border: 1px solid #DC8862;
+                selection-background-color: #DC8862;
+            }
+            QSpinBox {
+                background-color: #2a2a2a;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                padding: 6px 12px;
+            }
+            QSpinBox:hover {
+                border-color: #DC8862;
+            }
+            QProgressBar {
+                background-color: #2a2a2a;
+                border: 1px solid #3a3a3a;
+                border-radius: 6px;
+                text-align: center;
+                color: white;
+            }
+            QProgressBar::chunk {
+                background-color: #DC8862;
+                border-radius: 5px;
+            }
+            QStatusBar {
+                background-color: #1a1a1a;
+                border-top: 1px solid #3a3a3a;
+                color: #b0b0b0;
+            }
+            QLabel {
+                color: #e0e0e0;
+            }
+            QScrollBar:vertical {
+                background-color: #2a2a2a;
+                width: 12px;
+                border-radius: 6px;
+            }
+            QScrollBar::handle:vertical {
+                background-color: #4a4a4a;
+                border-radius: 6px;
+                min-height: 20px;
+            }
+            QScrollBar::handle:vertical:hover {
+                background-color: #DC8862;
+            }
+            QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical {
+                height: 0px;
+            }
+        """)
+        
         # Central widget
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
         
-        # Title
-        title = QtWidgets.QLabel("Audio Toolbox Pro")
-        title_font = QtGui.QFont()
-        title_font.setPointSize(24)
-        title_font.setBold(True)
-        title.setFont(title_font)
+        # Title with Claude branding
+        title = QtWidgets.QLabel("🎵 Audio Toolbox Pro")
+        title.setStyleSheet("""
+            QLabel {
+                color: #DC8862;
+                font-size: 28px;
+                font-weight: 700;
+                padding: 20px;
+                background-color: #252525;
+                border-radius: 10px;
+                margin: 10px;
+            }
+        """)
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         
@@ -130,18 +274,41 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         ops_group = QtWidgets.QGroupBox("Operations")
         ops_layout = QtWidgets.QVBoxLayout(ops_group)
         
+        # Modern button styles with icons
+        button_styles = {
+            "Import OBS": ("#DC8862", "#E59B7A"),
+            "Convert to MP3": ("#6B89E5", "#7D9AE8"),
+            "Merge Selected": ("#5FB86E", "#6FC57D"),
+            "Merge by Date": ("#E5B45F", "#E8C070"),
+            "Remove Silence": ("#B85F9E", "#C570AC"),
+            "Organize": ("#5FB8B8", "#6FC5C5"),
+        }
+        
         operations = [
-            ("📥 Import OBS", self.import_files),
-            ("🎬 Convert to MP3", self.convert_selected),
-            ("🎵 Merge Selected", self.merge_selected),
-            ("📅 Merge by Date", self.merge_by_date),
-            ("🔇 Remove Silence", self.remove_silence),
-            ("📦 Organize", self.organize_files),
+            ("📥 Import OBS", self.import_files, "Import OBS"),
+            ("🎬 Convert to MP3", self.convert_selected, "Convert to MP3"),
+            ("🎵 Merge Selected", self.merge_selected, "Merge Selected"),
+            ("📅 Merge by Date", self.merge_by_date, "Merge by Date"),
+            ("🔇 Remove Silence", self.remove_silence, "Remove Silence"),
+            ("📦 Organize", self.organize_files, "Organize"),
         ]
         
-        for text, callback in operations:
+        for text, callback, style_key in operations:
             btn = QtWidgets.QPushButton(text)
             btn.clicked.connect(callback)
+            color, hover_color = button_styles[style_key]
+            btn.setStyleSheet(f"""
+                QPushButton {{
+                    background-color: {color};
+                    font-size: 14px;
+                    font-weight: 600;
+                    padding: 12px;
+                    text-align: left;
+                }}
+                QPushButton:hover {{
+                    background-color: {hover_color};
+                }}
+            """)
             ops_layout.addWidget(btn)
         
         controls_layout.addWidget(ops_group)
@@ -150,16 +317,47 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         sel_group = QtWidgets.QGroupBox("Selection")
         sel_layout = QtWidgets.QVBoxLayout(sel_group)
         
+        # Selection buttons with secondary style
         select_all_btn = QtWidgets.QPushButton("✓ Select All")
         select_all_btn.clicked.connect(self.select_all_files)
+        select_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                border: 1px solid #DC8862;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                border-color: #E59B7A;
+            }
+        """)
         sel_layout.addWidget(select_all_btn)
         
         deselect_all_btn = QtWidgets.QPushButton("✗ Deselect All")
         deselect_all_btn.clicked.connect(self.deselect_all_files)
+        deselect_all_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                border: 1px solid #DC8862;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                border-color: #E59B7A;
+            }
+        """)
         sel_layout.addWidget(deselect_all_btn)
         
         refresh_btn = QtWidgets.QPushButton("↻ Refresh")
         refresh_btn.clicked.connect(self.refresh_files)
+        refresh_btn.setStyleSheet("""
+            QPushButton {
+                background-color: #3a3a3a;
+                border: 1px solid #DC8862;
+            }
+            QPushButton:hover {
+                background-color: #4a4a4a;
+                border-color: #E59B7A;
+            }
+        """)
         sel_layout.addWidget(refresh_btn)
         
         controls_layout.addWidget(sel_group)
@@ -199,8 +397,15 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self.progress_bar.setVisible(False)
         layout.addWidget(self.progress_bar)
         
-        # Status bar
+        # Status bar with modern styling
         self.status_label = QtWidgets.QLabel("Ready")
+        self.status_label.setStyleSheet("""
+            QLabel {
+                color: #DC8862;
+                font-weight: 500;
+                padding: 4px 8px;
+            }
+        """)
         self.statusBar().addWidget(self.status_label)
     
     def refresh_files(self):
@@ -279,14 +484,14 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
             if file.state == FileState.MERGED:
                 # Darker gray for merged files with strikethrough effect
                 for col in range(file_item.columnCount()):
-                    file_item.setForeground(col, QtGui.QBrush(QColor(100, 100, 100)))
+                    file_item.setForeground(col, QtGui.QBrush(QColor(80, 80, 80)))
                     font = file_item.font(col)
                     font.setStrikeOut(True)
                     file_item.setFont(col, font)
             elif file.state == FileState.MERGED_OUTPUT:
-                # Green tint for merged output files
+                # Claude green for merged output files
                 for col in range(file_item.columnCount()):
-                    file_item.setForeground(col, QtGui.QBrush(QColor(40, 120, 40)))
+                    file_item.setForeground(col, QtGui.QBrush(QColor(95, 184, 110)))
                     font = file_item.font(col)
                     font.setBold(True)
                     file_item.setFont(col, font)

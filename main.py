@@ -9,7 +9,7 @@ import logging
 from pathlib import Path
 from PyQt5.QtWidgets import QApplication
 
-from audio_gui_clean import AudioToolboxGUI
+from audio_gui import AudioToolboxGUI
 
 
 def load_config() -> dict:
