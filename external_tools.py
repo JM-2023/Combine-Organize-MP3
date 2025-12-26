@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Optional, List, Tuple
 import platform
 import os
+import zipfile
 
 
 class ToolManager:
@@ -73,6 +74,15 @@ class ToolManager:
     @property
     def has_sevenzip(self) -> bool:
         return self._sevenzip_path is not None
+
+    def preferred_archive_suffix(self) -> str:
+        """Preferred archive suffix based on config and available tools."""
+        configured = str(self.config.get('archive_format', '')).strip().lower()
+        if configured in {"7z", ".7z"}:
+            if self.has_sevenzip:
+                return ".7z"
+            logging.warning("archive_format=7z requested but 7-Zip not found; falling back to .zip")
+        return ".zip"
     
     def run_ffmpeg(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
         """Run FFmpeg with given arguments"""
@@ -183,24 +193,60 @@ class ToolManager:
                 list_file.unlink(missing_ok=True)
     
     def create_archive(self, input_dir: Path, output_file: Path) -> bool:
+        """Create an archive of a directory.
+
+        - `.7z` uses 7-Zip if available
+        - `.zip` uses Python's standard library (no external dependency)
+        """
+        suffix = output_file.suffix.lower()
+        if suffix == ".7z":
+            return self._create_7z_archive(input_dir, output_file)
+        if suffix == ".zip":
+            return self._create_zip_archive(input_dir, output_file)
+
+        logging.error(f"Unsupported archive format: {output_file.suffix}")
+        return False
+
+    def _create_7z_archive(self, input_dir: Path, output_file: Path) -> bool:
         """Create a 7z archive of a directory"""
         if not self.has_sevenzip:
-            logging.error("7-Zip not available for archiving")
+            logging.error("7-Zip not available for .7z archiving")
             return False
-        
+
         try:
             args = [
                 'a',  # Add to archive
                 '-t7z',  # 7z format
                 '-mx=5',  # Compression level
+                '-y',  # Assume Yes on all queries
                 str(output_file),
                 str(input_dir / '*')
             ]
             result = self.run_sevenzip(args)
             return result.returncode == 0
         except subprocess.CalledProcessError as e:
-            logging.error(f"Archive creation failed: {e}")
+            logging.error(f"7z archive creation failed: {e}")
             return False
         except Exception as e:
-            logging.error(f"Archive error: {e}")
+            logging.error(f"7z archive error: {e}")
+            return False
+
+    def _create_zip_archive(self, input_dir: Path, output_file: Path) -> bool:
+        """Create a zip archive containing the directory (including the root folder)."""
+        try:
+            input_dir = Path(input_dir)
+            output_file = Path(output_file)
+            output_file.parent.mkdir(parents=True, exist_ok=True)
+
+            root_parent = input_dir.parent
+            with zipfile.ZipFile(output_file, 'w', compression=zipfile.ZIP_DEFLATED) as zipf:
+                for file_path in sorted(input_dir.rglob('*')):
+                    if not file_path.is_file():
+                        continue
+                    arcname = file_path.relative_to(root_parent)
+                    zipf.write(file_path, arcname.as_posix())
+
+            return True
+        except Exception as e:
+            logging.error(f"Zip archive error: {e}")
             return False

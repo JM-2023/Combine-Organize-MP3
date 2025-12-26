@@ -290,9 +290,6 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
     def merge_selected(self):
         """Merge audio files"""
         files = [f for f in self.get_selected() if f.is_audio]
-        if len(files) < 2:
-            QtWidgets.QMessageBox.information(self, "Too Few", "Select 2+ audio files")
-            return
         
         task = ProcessingTask(TaskType.MERGE, files, Path.cwd())
         self.run_task(task)
@@ -332,7 +329,7 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         """Organize files"""
         reply = QtWidgets.QMessageBox.question(
             self, "Organize",
-            "Organize all files by date?",
+            "Organize all files by date and create a compressed archive for each folder?",
             QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No
         )
         

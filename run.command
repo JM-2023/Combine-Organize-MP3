@@ -20,6 +20,11 @@ fi
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv .venv
+else
+    if ! ./.venv/bin/python -c "import sys" >/dev/null 2>&1; then
+        echo "Refreshing virtual environment..."
+        python3 -m venv --clear .venv
+    fi
 fi
 
 # Activate and install dependencies

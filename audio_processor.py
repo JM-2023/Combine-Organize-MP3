@@ -7,7 +7,7 @@ import logging
 from pathlib import Path
 from datetime import datetime
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import List, Optional, Callable, Dict, Any
+from typing import List, Optional, Callable, Dict, Any, Set
 import re
 
 from audio_models import (
@@ -36,12 +36,40 @@ class AudioProcessor:
         }
         
         # File detection patterns
-        self.date_pattern = re.compile(
-            self.config.get('date_pattern', r'(\d{4}-\d{2}-\d{2})[_ ](\d{2}-\d{2}(?:-\d{2})?)')
-        )
+        default_date_pattern = r'(\d{4}-\d{2}-\d{2})[_ ](\d{2}-\d{2}(?:-\d{2})?)'
+        date_pattern = self.config.get('date_pattern') or default_date_pattern
+        self.date_pattern = re.compile(date_pattern)
         
-        # Pattern for merged output files: YYYYMMDD HH-MM.mp3
-        self.merged_output_pattern = re.compile(r'^(\d{8}) (\d{2}-\d{2})\.mp3$')
+        # Pattern for merged output files: YYYYMMDD HH-MM (comments...).mp3
+        # New outputs always use ASCII parentheses (), but we also accept fullwidth
+        # （） when scanning for backward compatibility.
+        self.merged_output_pattern = re.compile(
+            r'^(\d{8}) (\d{2}-\d{2})(?:\s*(?:\([^)]*\)|（[^）]*）))*\.mp3$'
+        )
+        self.filename_comment_pattern = re.compile(r'\([^)]*\)|（[^）]*）')
+
+    def _normalize_comment_group(self, group: str) -> str:
+        """Normalize a filename comment group to ASCII parentheses, e.g. （备注） -> (备注)."""
+        group = group.strip()
+        if len(group) < 2:
+            return ""
+        if (group.startswith("(") and group.endswith(")")) or (group.startswith("（") and group.endswith("）")):
+            inner = group[1:-1].strip()
+            return f"({inner})" if inner else ""
+        return ""
+
+    def _collect_filename_comments(self, files: List[AudioFile]) -> List[str]:
+        """Collect unique comment groups like (foo) / （foo） from filenames (normalized to (foo))."""
+        comments: List[str] = []
+        seen: Set[str] = set()
+        for audio_file in files:
+            for match in self.filename_comment_pattern.findall(audio_file.path.stem):
+                comment = self._normalize_comment_group(match)
+                if not comment or comment in seen:
+                    continue
+                comments.append(comment)
+                seen.add(comment)
+        return comments
     
     def find_obs_save_location(self) -> Optional[Path]:
         """Find OBS default save location on macOS"""
@@ -89,7 +117,7 @@ class AudioProcessor:
             # Check if this is a merged output file
             merged_match = self.merged_output_pattern.match(path.name)
             if merged_match:
-                # Parse merged output filename: YYYYMMDD HH-MM.mp3
+                # Parse merged output filename: YYYYMMDD HH-MM (comments...).mp3
                 date_str = merged_match.group(1)
                 time_str = merged_match.group(2).replace('-', ':')
                 timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y%m%d %H:%M")
@@ -236,10 +264,14 @@ class AudioProcessor:
         # Sort files chronologically
         sorted_files = sorted(task.files, key=lambda f: f.timestamp)
         
-        # Generate output filename: YYYYMMDD HH-MM.mp3
-        # Use the date and start time from the first file
+        # Generate output filename: YYYYMMDD HH-MM (comments...).mp3
+        # Use the date and start time from the first file and preserve comment groups.
         first_time = sorted_files[0].timestamp
-        output_name = f"{first_time.strftime('%Y%m%d %H-%M')}.mp3"
+        output_stem = first_time.strftime('%Y%m%d %H-%M')
+        comments = self._collect_filename_comments(sorted_files)
+        if comments:
+            output_stem = f"{output_stem} {' '.join(comments)}"
+        output_name = f"{output_stem}.mp3"
         output_path = task.output_dir / output_name
         
         if progress_callback:
@@ -311,7 +343,7 @@ class AudioProcessor:
         # Filter out merged output files - only organize source files
         source_files = []
         for audio_file in task.files:
-            # Skip merged output files (format: YYYYMMDD HH-MM.mp3)
+            # Skip merged output files (format: YYYYMMDD HH-MM (comments...).mp3)
             if self.merged_output_pattern.match(audio_file.path.name):
                 if progress_callback:
                     progress_callback(f"Skipping merged output: {audio_file.basename}")
@@ -369,9 +401,9 @@ class AudioProcessor:
             organized_dirs.append(date_dir)
             
             # Create archive if requested  
-            if task.params.get('create_archive', False) and self.tools.has_sevenzip:
-                # Use folder name for archive
-                archive_path = task.output_dir / f"{folder_name}.7z"
+            if task.params.get('create_archive', False):
+                archive_suffix = self.tools.preferred_archive_suffix()
+                archive_path = task.output_dir / f"{folder_name}{archive_suffix}"
                 if self.tools.create_archive(date_dir, archive_path):
                     if progress_callback:
                         progress_callback(f"Created archive: {archive_path.name}")
