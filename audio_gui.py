@@ -66,48 +66,49 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         central = QtWidgets.QWidget()
         self.setCentralWidget(central)
         layout = QtWidgets.QVBoxLayout(central)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(12)
         
         # Title
         title = QtWidgets.QLabel("🎵 Audio Toolbox Pro")
-        title.setStyleSheet(f"""
-            QLabel {{
-                color: {Theme.COLORS['accent']};
-                font-size: 28px;
-                font-weight: 700;
-                padding: 20px;
-                background-color: #252525;
-                border-radius: 10px;
-                margin: 10px;
-            }}
-        """)
+        title.setObjectName("appTitle")
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
-        
-        # Content area
-        content = QtWidgets.QHBoxLayout()
         
         # File tree
         tree_group = QtWidgets.QGroupBox("Files by Date")
         tree_layout = QtWidgets.QVBoxLayout(tree_group)
+        tree_layout.setContentsMargins(12, 16, 12, 12)
         self.file_tree = FileTreeWidget()
         tree_layout.addWidget(self.file_tree)
-        content.addWidget(tree_group, stretch=3)
         
-        # Controls
-        self.controls = self._build_controls()
-        content.addLayout(self.controls, stretch=1)
+        # Controls (scrollable)
+        controls_panel = self._build_controls()
+        controls_scroll = QtWidgets.QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setFrameShape(QtWidgets.QFrame.NoFrame)
+        controls_scroll.setWidget(controls_panel)
         
-        layout.addLayout(content)
+        # Split view
+        splitter = QtWidgets.QSplitter(Qt.Horizontal)
+        splitter.setChildrenCollapsible(False)
+        splitter.addWidget(tree_group)
+        splitter.addWidget(controls_scroll)
+        splitter.setStretchFactor(0, 3)
+        splitter.setStretchFactor(1, 1)
+        
+        layout.addWidget(splitter, stretch=1)
         
         # Status
         self.status = StatusDisplay()
-        layout.addWidget(self.status)
-        
-        self.statusBar().addWidget(self.status.label)
+        self.statusBar().addPermanentWidget(self.status, 1)
     
     def _build_controls(self):
         """Build control panel"""
-        layout = QtWidgets.QVBoxLayout()
+        panel = QtWidgets.QWidget()
+        layout = QtWidgets.QVBoxLayout(panel)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(12)
         
         # Operations
         ops = ControlPanel()
@@ -159,7 +160,7 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         layout.addWidget(self.settings)
         layout.addStretch()
         
-        return layout
+        return panel
     
     def _connect_signals(self):
         """Connect signals - kept separate"""
