@@ -14,8 +14,9 @@ class ActionButton(QtWidgets.QPushButton):
     def __init__(self, text, action_type, callback):
         super().__init__(text)
         self.action_type = action_type
+        self.setProperty("action", action_type)
+        self.setCursor(Qt.PointingHandCursor)
         self.clicked.connect(callback)
-        self.setStyleSheet(Theme.button_style(action_type))
 
 
 class SecondaryButton(QtWidgets.QPushButton):
@@ -25,6 +26,7 @@ class SecondaryButton(QtWidgets.QPushButton):
         super().__init__(text)
         self.clicked.connect(callback)
         self.setProperty("class", "secondary")
+        self.setCursor(Qt.PointingHandCursor)
 
 
 class FileTreeWidget(QtWidgets.QTreeWidget):
@@ -34,10 +36,16 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
         super().__init__()
         self.setHeaderLabels(["File", "Time", "State", "Size"])
         self.setSelectionMode(QtWidgets.QAbstractItemView.ExtendedSelection)
-        self.setColumnWidth(0, 400)
-        self.setColumnWidth(1, 80)
-        self.setColumnWidth(2, 100)
-        self.setColumnWidth(3, 80)
+        self.setAlternatingRowColors(True)
+        self.setUniformRowHeights(True)
+        self.setAllColumnsShowFocus(True)
+        
+        header = self.header()
+        header.setStretchLastSection(False)
+        header.setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        header.setSectionResizeMode(1, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(2, QtWidgets.QHeaderView.ResizeToContents)
+        header.setSectionResizeMode(3, QtWidgets.QHeaderView.ResizeToContents)
     
     def add_group(self, date_key, timezone=None):
         """Add a date group"""
@@ -46,6 +54,13 @@ class FileTreeWidget(QtWidgets.QTreeWidget):
             display += f" ({timezone})"
         
         item = QtWidgets.QTreeWidgetItem([display])
+        item.setFirstColumnSpanned(True)
+        
+        font = item.font(0)
+        font.setBold(True)
+        item.setFont(0, font)
+        item.setForeground(0, QtGui.QBrush(QtGui.QColor(Theme.COLORS['accent'])))
+        
         self.addTopLevelItem(item)
         item.setExpanded(True)
         return item
@@ -167,21 +182,19 @@ class StatusDisplay(QtWidgets.QWidget):
     
     def __init__(self):
         super().__init__()
-        layout = QtWidgets.QVBoxLayout(self)
+        layout = QtWidgets.QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+        
+        self.label = QtWidgets.QLabel("Ready")
+        self.label.setObjectName("statusLabel")
+        layout.addWidget(self.label, stretch=1)
         
         self.progress = QtWidgets.QProgressBar()
         self.progress.setVisible(False)
+        self.progress.setTextVisible(False)
+        self.progress.setFixedWidth(180)
         layout.addWidget(self.progress)
-        
-        self.label = QtWidgets.QLabel("Ready")
-        self.label.setStyleSheet(f"""
-            QLabel {{
-                color: {Theme.COLORS['accent']};
-                font-weight: 500;
-                padding: 4px 8px;
-            }}
-        """)
-        layout.addWidget(self.label)
     
     def show_progress(self, determinate=False):
         """Show progress bar"""
