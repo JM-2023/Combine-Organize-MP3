@@ -55,6 +55,29 @@ class Theme:
     }
     
     @classmethod
+    def _action_button_stylesheet(cls) -> str:
+        """Generate per-action button stylesheet blocks."""
+        blocks = []
+        for action, (color, hover) in cls.ACTIONS.items():
+            blocks.append(f"""
+            QPushButton[action="{action}"] {{
+                background-color: {color};
+                text-align: left;
+                font-weight: 600;
+                padding: 12px;
+            }}
+            
+            QPushButton[action="{action}"]:hover {{
+                background-color: {hover};
+            }}
+            
+            QPushButton[action="{action}"]:pressed {{
+                background-color: {color};
+            }}
+            """)
+        return "\n".join(blocks)
+    
+    @classmethod
     def stylesheet(cls):
         """Generate complete stylesheet from data"""
         return f"""
@@ -67,6 +90,16 @@ class Theme:
             color: {cls.COLORS['text']};
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
             font-size: 14px;
+        }}
+        
+        QLabel#appTitle {{
+            color: {cls.COLORS['accent']};
+            font-size: 28px;
+            font-weight: 700;
+            padding: 18px 20px;
+            background-color: {cls.COLORS['bg_secondary']};
+            border: 1px solid {cls.COLORS['border']};
+            border-radius: 10px;
         }}
         
         QGroupBox {{
@@ -103,14 +136,27 @@ class Theme:
             background-color: {cls.COLORS['accent_pressed']};
         }}
         
-        QPushButton.secondary {{
+        QPushButton.secondary,
+        QPushButton[class="secondary"] {{
             background-color: {cls.COLORS['bg_hover']};
             border: 1px solid {cls.COLORS['accent']};
         }}
         
-        QPushButton.secondary:hover {{
+        QPushButton.secondary:hover,
+        QPushButton[class="secondary"]:hover {{
             background-color: #4a4a4a;
             border-color: {cls.COLORS['accent_hover']};
+        }}
+        
+        QPushButton.secondary:pressed,
+        QPushButton[class="secondary"]:pressed {{
+            background-color: {cls.COLORS['bg_secondary']};
+            border-color: {cls.COLORS['accent_pressed']};
+        }}
+        
+        QPushButton:disabled {{
+            background-color: {cls.COLORS['border']};
+            color: {cls.COLORS['text_dim']};
         }}
         
         QTreeWidget {{
@@ -118,6 +164,7 @@ class Theme:
             border: 1px solid {cls.COLORS['border']};
             border-radius: 8px;
             selection-background-color: {cls.COLORS['accent']};
+            alternate-background-color: #262626;
         }}
         
         QTreeWidget::item {{
@@ -185,6 +232,20 @@ class Theme:
             color: {cls.COLORS['text_dim']};
         }}
         
+        QLabel#statusLabel {{
+            color: {cls.COLORS['accent']};
+            font-weight: 500;
+            padding: 0 6px;
+        }}
+        
+        QSplitter::handle {{
+            background-color: {cls.COLORS['bg_primary']};
+        }}
+        
+        QSplitter::handle:horizontal {{
+            width: 10px;
+        }}
+        
         QScrollBar:vertical {{
             background-color: {cls.COLORS['bg_secondary']};
             width: 12px;
@@ -205,23 +266,12 @@ class Theme:
         QScrollBar::sub-line:vertical {{
             height: 0px;
         }}
-        """
-    
-    @classmethod
-    def button_style(cls, action_type):
-        """Get button style for specific action"""
-        if action_type in cls.ACTIONS:
-            color, hover = cls.ACTIONS[action_type]
-            return f"""
-                QPushButton {{
-                    background-color: {color};
-                    font-size: 14px;
-                    font-weight: 600;
-                    padding: 12px;
-                    text-align: left;
-                }}
-                QPushButton:hover {{
-                    background-color: {hover};
-                }}
-            """
-        return ""
+        
+        QToolTip {{
+            background-color: {cls.COLORS['bg_secondary']};
+            color: {cls.COLORS['text']};
+            border: 1px solid {cls.COLORS['border']};
+            padding: 6px 8px;
+            border-radius: 6px;
+        }}
+        """ + cls._action_button_stylesheet()
