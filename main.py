@@ -43,6 +43,7 @@ def main():
     
     # Create Qt application
     app = QApplication(sys.argv)
+    app.setOrganizationName("AudioToolbox")
     app.setApplicationName("Audio Toolbox")
     
     # Create and show main window

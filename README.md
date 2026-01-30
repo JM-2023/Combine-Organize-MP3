@@ -31,6 +31,11 @@ python3 -m venv .venv
 .venv/bin/python main.py
 ```
 
+## UI Tips
+
+- The window size/position and split pane sizes are remembered automatically.
+- If the window ever opens too small or off-screen, use `View → Reset Window Layout`.
+
 ## Behavior & Naming
 
 ### Scan & Timestamp Extraction
@@ -115,6 +120,9 @@ Optional `config.json`:
   "max_workers": 4,           // Thread pool size
   "date_pattern": null,       // Optional filename timestamp regex override
   "default_timezone": "Asia/Shanghai",
+  "ui_window_scale": 0.4,     // Default window size relative to screen
+  "ui_scale": 1.0,            // Base UI scale (fonts/padding)
+  "ui_auto_scale": true,      // Auto-adjust UI scale with window size
   "log_level": "INFO"
 }
 ```

@@ -6,6 +6,18 @@ Good programmers worry about data structures
 
 class Theme:
     """Single source of truth for all styling"""
+
+    @staticmethod
+    def _clamp_scale(scale: float) -> float:
+        try:
+            scale = float(scale)
+        except (TypeError, ValueError):
+            return 1.0
+        return max(0.7, min(scale, 1.25))
+
+    @staticmethod
+    def _scaled(value: float, scale: float, *, minimum: int = 0) -> int:
+        return max(minimum, int(round(value * scale)))
     
     # Core colors - Claude palette
     COLORS = {
@@ -55,8 +67,10 @@ class Theme:
     }
     
     @classmethod
-    def _action_button_stylesheet(cls) -> str:
+    def _action_button_stylesheet(cls, scale: float = 1.0) -> str:
         """Generate per-action button stylesheet blocks."""
+        scale = cls._clamp_scale(scale)
+        action_padding = cls._scaled(12, scale, minimum=1)
         blocks = []
         for action, (color, hover) in cls.ACTIONS.items():
             blocks.append(f"""
@@ -64,7 +78,7 @@ class Theme:
                 background-color: {color};
                 text-align: left;
                 font-weight: 600;
-                padding: 12px;
+                padding: {action_padding}px;
             }}
             
             QPushButton[action="{action}"]:hover {{
@@ -78,8 +92,54 @@ class Theme:
         return "\n".join(blocks)
     
     @classmethod
-    def stylesheet(cls):
+    def stylesheet(cls, scale: float = 1.0):
         """Generate complete stylesheet from data"""
+        scale = cls._clamp_scale(scale)
+
+        base_font = cls._scaled(14, scale, minimum=10)
+        title_font = cls._scaled(28, scale, minimum=14)
+        title_pad_y = cls._scaled(18, scale)
+        title_pad_x = cls._scaled(20, scale)
+        title_border_radius = cls._scaled(10, scale, minimum=1)
+
+        group_border_radius = cls._scaled(8, scale, minimum=1)
+        group_margin_top = cls._scaled(12, scale)
+        group_padding_top = cls._scaled(12, scale)
+        group_title_left = cls._scaled(12, scale)
+        group_title_pad_x = cls._scaled(8, scale)
+
+        button_border_radius = cls._scaled(6, scale, minimum=1)
+        button_pad_y = cls._scaled(10, scale, minimum=1)
+        button_pad_x = cls._scaled(16, scale, minimum=1)
+        button_min_height = cls._scaled(20, scale, minimum=1)
+
+        tree_border_radius = cls._scaled(8, scale, minimum=1)
+        tree_item_padding = cls._scaled(4, scale)
+        tree_item_border_radius = cls._scaled(4, scale, minimum=1)
+
+        header_padding = cls._scaled(8, scale)
+        header_border_bottom = cls._scaled(2, scale, minimum=1)
+
+        combo_border_radius = cls._scaled(6, scale, minimum=1)
+        combo_pad_y = cls._scaled(6, scale)
+        combo_pad_x = cls._scaled(12, scale)
+        combo_min_width = cls._scaled(120, scale, minimum=60)
+
+        progress_border_radius = cls._scaled(6, scale, minimum=1)
+        progress_chunk_radius = cls._scaled(5, scale, minimum=1)
+        status_top_border = cls._scaled(1, scale, minimum=1)
+        status_label_pad_x = cls._scaled(6, scale)
+
+        splitter_handle_width = cls._scaled(10, scale, minimum=4)
+
+        scrollbar_width = cls._scaled(12, scale, minimum=8)
+        scrollbar_radius = cls._scaled(6, scale, minimum=1)
+        scrollbar_handle_min_height = cls._scaled(20, scale, minimum=10)
+
+        tooltip_pad_y = cls._scaled(6, scale)
+        tooltip_pad_x = cls._scaled(8, scale)
+        tooltip_radius = cls._scaled(6, scale, minimum=1)
+
         return f"""
         QMainWindow {{
             background-color: {cls.COLORS['bg_primary']};
@@ -89,43 +149,43 @@ class Theme:
             background-color: {cls.COLORS['bg_primary']};
             color: {cls.COLORS['text']};
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-            font-size: 14px;
+            font-size: {base_font}px;
         }}
         
         QLabel#appTitle {{
             color: {cls.COLORS['accent']};
-            font-size: 28px;
+            font-size: {title_font}px;
             font-weight: 700;
-            padding: 18px 20px;
+            padding: {title_pad_y}px {title_pad_x}px;
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 10px;
+            border-radius: {title_border_radius}px;
         }}
         
         QGroupBox {{
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 8px;
-            margin-top: 12px;
-            padding-top: 12px;
+            border-radius: {group_border_radius}px;
+            margin-top: {group_margin_top}px;
+            padding-top: {group_padding_top}px;
             font-weight: 600;
         }}
         
         QGroupBox::title {{
             color: {cls.COLORS['accent']};
             subcontrol-origin: margin;
-            left: 12px;
-            padding: 0 8px;
+            left: {group_title_left}px;
+            padding: 0 {group_title_pad_x}px;
         }}
         
         QPushButton {{
             background-color: {cls.COLORS['accent']};
             color: white;
             border: none;
-            border-radius: 6px;
-            padding: 10px 16px;
+            border-radius: {button_border_radius}px;
+            padding: {button_pad_y}px {button_pad_x}px;
             font-weight: 500;
-            min-height: 20px;
+            min-height: {button_min_height}px;
         }}
         
         QPushButton:hover {{
@@ -162,14 +222,14 @@ class Theme:
         QTreeWidget {{
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 8px;
+            border-radius: {tree_border_radius}px;
             selection-background-color: {cls.COLORS['accent']};
             alternate-background-color: #262626;
         }}
         
         QTreeWidget::item {{
-            padding: 4px;
-            border-radius: 4px;
+            padding: {tree_item_padding}px;
+            border-radius: {tree_item_border_radius}px;
         }}
         
         QTreeWidget::item:selected {{
@@ -184,18 +244,18 @@ class Theme:
         QHeaderView::section {{
             background-color: {cls.COLORS['bg_secondary']};
             color: {cls.COLORS['accent']};
-            padding: 8px;
+            padding: {header_padding}px;
             border: none;
-            border-bottom: 2px solid {cls.COLORS['accent']};
+            border-bottom: {header_border_bottom}px solid {cls.COLORS['accent']};
             font-weight: 600;
         }}
         
         QComboBox {{
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 6px;
-            padding: 6px 12px;
-            min-width: 120px;
+            border-radius: {combo_border_radius}px;
+            padding: {combo_pad_y}px {combo_pad_x}px;
+            min-width: {combo_min_width}px;
         }}
         
         QComboBox:hover {{
@@ -205,8 +265,8 @@ class Theme:
         QSpinBox {{
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 6px;
-            padding: 6px 12px;
+            border-radius: {combo_border_radius}px;
+            padding: {combo_pad_y}px {combo_pad_x}px;
         }}
         
         QSpinBox:hover {{
@@ -216,26 +276,26 @@ class Theme:
         QProgressBar {{
             background-color: {cls.COLORS['bg_secondary']};
             border: 1px solid {cls.COLORS['border']};
-            border-radius: 6px;
+            border-radius: {progress_border_radius}px;
             text-align: center;
             color: white;
         }}
         
         QProgressBar::chunk {{
             background-color: {cls.COLORS['accent']};
-            border-radius: 5px;
+            border-radius: {progress_chunk_radius}px;
         }}
         
         QStatusBar {{
             background-color: {cls.COLORS['bg_primary']};
-            border-top: 1px solid {cls.COLORS['border']};
+            border-top: {status_top_border}px solid {cls.COLORS['border']};
             color: {cls.COLORS['text_dim']};
         }}
         
         QLabel#statusLabel {{
             color: {cls.COLORS['accent']};
             font-weight: 500;
-            padding: 0 6px;
+            padding: 0 {status_label_pad_x}px;
         }}
         
         QSplitter::handle {{
@@ -243,19 +303,19 @@ class Theme:
         }}
         
         QSplitter::handle:horizontal {{
-            width: 10px;
+            width: {splitter_handle_width}px;
         }}
         
         QScrollBar:vertical {{
             background-color: {cls.COLORS['bg_secondary']};
-            width: 12px;
-            border-radius: 6px;
+            width: {scrollbar_width}px;
+            border-radius: {scrollbar_radius}px;
         }}
         
         QScrollBar::handle:vertical {{
             background-color: #4a4a4a;
-            border-radius: 6px;
-            min-height: 20px;
+            border-radius: {scrollbar_radius}px;
+            min-height: {scrollbar_handle_min_height}px;
         }}
         
         QScrollBar::handle:vertical:hover {{
@@ -271,7 +331,7 @@ class Theme:
             background-color: {cls.COLORS['bg_secondary']};
             color: {cls.COLORS['text']};
             border: 1px solid {cls.COLORS['border']};
-            padding: 6px 8px;
-            border-radius: 6px;
+            padding: {tooltip_pad_y}px {tooltip_pad_x}px;
+            border-radius: {tooltip_radius}px;
         }}
-        """ + cls._action_button_stylesheet()
+        """ + cls._action_button_stylesheet(scale)

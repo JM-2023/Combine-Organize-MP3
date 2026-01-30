@@ -193,8 +193,20 @@ class StatusDisplay(QtWidgets.QWidget):
         self.progress = QtWidgets.QProgressBar()
         self.progress.setVisible(False)
         self.progress.setTextVisible(False)
-        self.progress.setFixedWidth(180)
+        self._set_progress_widths(120, 180)
         layout.addWidget(self.progress)
+
+    def _set_progress_widths(self, min_width: int, max_width: int):
+        self.progress.setMinimumWidth(min_width)
+        self.progress.setMaximumWidth(max_width)
+
+    def set_scale(self, scale: float):
+        try:
+            scale = float(scale)
+        except (TypeError, ValueError):
+            scale = 1.0
+        scale = max(0.7, min(scale, 1.25))
+        self._set_progress_widths(int(120 * scale), int(180 * scale))
     
     def show_progress(self, determinate=False):
         """Show progress bar"""
