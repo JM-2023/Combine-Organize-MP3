@@ -89,12 +89,11 @@ class AudioFile:
         return self.format in ['mp3', 'wav', 'm4a', 'flac', 'ogg']
     
     def __hash__(self):
-        return hash(self.path)
+        # Hash/equality must remain stable even if `path` changes (e.g., after rename).
+        return object.__hash__(self)
     
     def __eq__(self, other):
-        if not isinstance(other, AudioFile):
-            return False
-        return self.path == other.path
+        return self is other
 
 
 @dataclass

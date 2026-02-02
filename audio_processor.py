@@ -129,12 +129,22 @@ class AudioProcessor:
             
             # Extract timestamp from regular filename
             match = self.date_pattern.search(path.name)
+            timestamp = None  # Let factory method use file mtime
             if match:
                 date_str = match.group(1)
                 time_str = match.group(2).replace('-', ':')
-                timestamp = datetime.strptime(f"{date_str} {time_str}", "%Y-%m-%d %H:%M:%S")
-            else:
-                timestamp = None  # Let factory method use file mtime
+                dt_str = f"{date_str} {time_str}"
+
+                try:
+                    if time_str.count(':') == 1:
+                        timestamp = datetime.strptime(dt_str, "%Y-%m-%d %H:%M")
+                    else:
+                        timestamp = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    logging.warning(
+                        f"Unparseable timestamp in filename, falling back to mtime: {path.name}"
+                    )
+                    timestamp = None
             
             return AudioFile.from_path(path, timestamp)
         except Exception as e:
@@ -156,18 +166,20 @@ class AudioProcessor:
         try:
             # Execute the handler
             result = handler(task, progress_callback)
-            
-            # Update states based on result
-            new_state = FileState.PROCESSED if result.success else FileState.FAILED
-            for file in task.files:
-                self.library.update_state(file, new_state)
-            
-            return result
         except Exception as e:
             logging.error(f"Task {task.task_type} failed: {e}")
             for file in task.files:
-                self.library.update_state(file, FileState.FAILED)
+                if file.state == FileState.PROCESSING:
+                    self.library.update_state(file, FileState.FAILED)
             return TaskResult(task=task, success=False, error=str(e))
+
+        # Update states based on result, but don't override handler-specific states.
+        new_state = FileState.PROCESSED if result.success else FileState.FAILED
+        for file in task.files:
+            if file.state == FileState.PROCESSING:
+                self.library.update_state(file, new_state)
+
+        return result
     
     def _import_files(self, task: ProcessingTask, 
                      progress_callback: Optional[Callable] = None) -> TaskResult:
@@ -242,8 +254,11 @@ class AudioProcessor:
                         self.library.add(converted_file)
                         if progress_callback:
                             progress_callback(f"Converted: {audio_file.basename}")
+                    else:
+                        self.library.update_state(audio_file, FileState.FAILED)
                 except Exception as e:
                     logging.error(f"Conversion failed for {audio_file.path}: {e}")
+                    self.library.update_state(audio_file, FileState.FAILED)
         
         return TaskResult(
             task=task,
@@ -324,8 +339,11 @@ class AudioProcessor:
                         processed += 1
                         if progress_callback:
                             progress_callback(f"Processed: {audio_file.basename}")
+                    else:
+                        self.library.update_state(audio_file, FileState.FAILED)
                 except Exception as e:
                     logging.error(f"Silence removal failed for {audio_file.path}: {e}")
+                    self.library.update_state(audio_file, FileState.FAILED)
         
         return TaskResult(
             task=task,
@@ -394,6 +412,7 @@ class AudioProcessor:
                     moved_count += 1
                 except Exception as e:
                     logging.error(f"Failed to move {file.path}: {e}")
+                    self.library.update_state(file, FileState.FAILED)
             
             if progress_callback:
                 progress_callback(f"Organized {len(sorted_files)} files in {folder_name}/")

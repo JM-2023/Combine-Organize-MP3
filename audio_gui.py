@@ -62,6 +62,9 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self._connect_signals()
         self.refresh()
 
+    def _is_busy(self) -> bool:
+        return bool(self.current_thread and self.current_thread.isRunning())
+
     def _clamp(self, value: float, min_value: float, max_value: float) -> float:
         return max(min_value, min(value, max_value))
 
@@ -388,6 +391,9 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
     
     def refresh(self):
         """Refresh file display"""
+        if self._is_busy():
+            self.status.set_message("Task in progress - refresh disabled")
+            return
         self.processor.scan_directory()
         self._restore_states()
         self._update_tree()
