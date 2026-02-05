@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Audio Toolbox Pro</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand">
+        <div class="title">Audio Toolbox Pro</div>
+        <div class="subtitle">Local Web UI (127.0.0.1 only)</div>
+      </div>
+      <div class="status">
+        <div class="cwd" id="cwd"></div>
+        <div class="pill" id="busyPill">Idle</div>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel files">
+        <div class="panelHeader">
+          <div class="panelTitle">Files by Date</div>
+          <div class="panelActions">
+            <button class="btn secondary" id="refreshBtn">Refresh</button>
+          </div>
+        </div>
+        <div class="panelBody" id="filesRoot"></div>
+      </section>
+
+      <aside class="panel controls">
+        <div class="panelHeader">
+          <div class="panelTitle">Controls</div>
+        </div>
+
+        <div class="panelBody">
+          <div class="group">
+            <div class="groupTitle">Operations</div>
+            <button class="btn action import" id="importBtn">Import OBS</button>
+            <button class="btn action convert" id="convertBtn">Convert to MP3</button>
+            <button class="btn action merge" id="mergeBtn">Merge Selected</button>
+            <button class="btn action silence" id="silenceBtn">Remove Silence</button>
+            <button class="btn action organize" id="organizeBtn">Organize</button>
+          </div>
+
+          <div class="group">
+            <div class="groupTitle">Selection</div>
+            <div class="row">
+              <button class="btn secondary" id="selectAllBtn">Select All</button>
+              <button class="btn secondary" id="deselectAllBtn">Deselect All</button>
+            </div>
+            <div class="hint" id="selectionHint">0 selected</div>
+          </div>
+
+          <div class="group">
+            <div class="groupTitle">Settings</div>
+            <label class="field">
+              <div class="label">Timezone</div>
+              <select id="timezoneSelect"></select>
+            </label>
+            <label class="field">
+              <div class="label">Threads</div>
+              <input id="threadsInput" type="number" min="1" max="16" step="1" />
+            </label>
+            <button class="btn secondary" id="saveSettingsBtn">Save Settings</button>
+          </div>
+
+          <div class="group">
+            <div class="groupTitle">Progress</div>
+            <div class="log" id="logBox"></div>
+          </div>
+        </div>
+      </aside>
+    </main>
+
+    <dialog id="importDialog" class="dialog">
+      <form method="dialog" class="dialogForm">
+        <div class="dialogTitle">Import OBS Recordings</div>
+        <div class="dialogText">Paste an OBS recordings directory path. The server will move .mp4 files into the current folder.</div>
+        <label class="field">
+          <div class="label">Source directory</div>
+          <input id="importPathInput" type="text" placeholder="/Users/you/Movies" />
+        </label>
+        <div class="dialogActions">
+          <button class="btn secondary" value="cancel">Cancel</button>
+          <button class="btn action import" id="importConfirmBtn" value="ok">Import</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script src="/app.js"></script>
+  </body>
+</html>
+

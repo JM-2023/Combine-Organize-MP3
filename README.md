@@ -15,26 +15,25 @@ Professional audio file management with Claude-themed modern UI.
 
 ### macOS
 ```bash
-# Double-click run.command or:
+# Web UI (recommended): double-click run.command or:
 ./run.command
+```
+
+Desktop UI (optional):
+```bash
+./run_desktop.command
 ```
 
 ### Other Systems
 ```bash
-# Create virtual environment
-python3 -m venv .venv
-
-# Install dependencies
-.venv/bin/pip install PyQt5 pytz
-
-# Run
-.venv/bin/python main.py
+# Web UI (standard library only)
+python3 web_server.py
 ```
 
 ## UI Tips
 
-- The window size/position and split pane sizes are remembered automatically.
-- If the window ever opens too small or off-screen, use `View → Reset Window Layout`.
+- Web UI runs locally on `127.0.0.1` and opens in your browser.
+- Desktop UI remembers window/split sizes; if it ever opens too small/off-screen, use `View → Reset Window Layout`.
 
 ## Behavior & Naming
 
@@ -84,6 +83,10 @@ UI (Presentation Only)
 ├── file_presenter.py    # Data transformation
 └── theme.py            # Claude theme configuration
 
+Web UI (Presentation Only)
+├── web_server.py        # Local web server + JSON API
+└── webui/               # Static HTML/CSS/JS
+
 Entry
 └── main.py             # Application entry point
 ```
@@ -129,9 +132,9 @@ Optional `config.json`:
 
 ## Dependencies
 
-- Python 3.8+
-- PyQt5 - GUI framework
-- pytz - Timezone support
+- Python 3.9+
+- Web UI: standard library only (no pip dependencies)
+- Desktop UI (optional): PyQt5
 - FFmpeg - Media conversion (auto-detected)
 - 7-Zip - Optional for `.7z` archives (otherwise `.zip`)
 
@@ -153,7 +156,7 @@ Optional `config.json`:
 
 - All file operations are thread-safe
 - Concurrent processing with configurable worker threads
-- Progress updates via Qt signals
+- Progress updates via background task logs (Web UI) or Qt signals (Desktop UI)
 
 ## Error Handling
 

@@ -1,14 +1,11 @@
 #!/bin/bash
-# Audio Toolbox - macOS Double-Click Launcher (Web UI)
+# Audio Toolbox - macOS Double-Click Launcher (Desktop UI / PyQt5)
 
-# Change to script directory
 cd "$(dirname "$0")"
 
-# Display startup info
-echo "Starting Audio Toolbox Web UI..."
+echo "Starting Audio Toolbox Desktop UI..."
 echo "================================"
 
-# Check Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 not found. Please install Python 3.8 or later."
     echo "Press Enter to exit..."
@@ -16,7 +13,6 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Check/create virtual environment
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv .venv
@@ -27,12 +23,27 @@ else
     fi
 fi
 
-# Run the application
-echo "================================"
-echo "Starting server (it will open Chrome)..."
-./.venv/bin/python web_server.py
+echo "Checking dependencies..."
+if ! ./.venv/bin/python -c "import PyQt5" 2>/dev/null; then
+    echo "Installing PyQt5 (this may take a few minutes)..."
+    ./.venv/bin/pip install -q --upgrade pip
+    ./.venv/bin/pip install PyQt5
+    if [ $? -ne 0 ]; then
+        echo "❌ Failed to install PyQt5."
+        echo "Try manually:"
+        echo "  ./.venv/bin/pip install PyQt5"
+        echo "Press Enter to exit..."
+        read
+        exit 1
+    fi
+else
+    echo "✓ PyQt5 already installed"
+fi
 
-# Keep terminal open on error
+echo "================================"
+echo "Starting application..."
+./.venv/bin/python main.py
+
 if [ $? -ne 0 ]; then
     echo ""
     echo "❌ Program exited with error. Press Enter to close..."

@@ -8,8 +8,8 @@ from datetime import datetime, timedelta, date
 from pathlib import Path
 from typing import Dict, List, Set, Optional, Tuple
 from dataclasses import dataclass, field
-import pytz
 import logging
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from audio_models import AudioFile, FileState
 
@@ -25,7 +25,16 @@ class TimeZoneAdapter:
         """
         self.timezone = timezone
         self.cutoff_hour = cutoff_hour
-        self._tz = pytz.timezone(timezone)
+        self._tz = self._get_zone(timezone)
+
+    def _get_zone(self, timezone: str) -> ZoneInfo:
+        try:
+            return ZoneInfo(timezone)
+        except ZoneInfoNotFoundError:
+            logging.warning(f"Unknown timezone '{timezone}', falling back to UTC")
+            return ZoneInfo("UTC")
+        except Exception:
+            return ZoneInfo("UTC")
     
     def get_adjusted_date(self, dt: datetime) -> date:
         """
@@ -33,11 +42,11 @@ class TimeZoneAdapter:
         Files before cutoff_hour belong to the previous day.
         """
         # Assume input datetime is in Beijing timezone
-        beijing_tz = pytz.timezone('Asia/Shanghai')
+        beijing_tz = ZoneInfo("Asia/Shanghai")
         
         # If datetime is naive, localize it to Beijing timezone
         if dt.tzinfo is None:
-            dt = beijing_tz.localize(dt)
+            dt = dt.replace(tzinfo=beijing_tz)
         
         # Convert to target timezone
         tz_dt = dt.astimezone(self._tz)
