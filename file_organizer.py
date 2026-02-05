@@ -85,8 +85,8 @@ class FileOrganizer:
         "#FFB3E6", "#B3FFE6", "#FFE6B3", "#B3B3FF", "#E6FFB3"
     ]
     
-    def __init__(self, timezone: str = 'UTC', colors: List[str] = None):
-        self.timezone_adapter = TimeZoneAdapter(timezone)
+    def __init__(self, timezone: str = 'UTC', colors: List[str] = None, cutoff_hour: int = 4):
+        self.timezone_adapter = TimeZoneAdapter(timezone, cutoff_hour=cutoff_hour)
         self.colors = colors or self.DEFAULT_COLORS
         self._mp3_stems_cache = set()
     

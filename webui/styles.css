@@ -141,6 +141,14 @@ body{
 .row{ display:flex; gap:8px; }
 .row .btn{ flex:1; }
 .hint{ font-size:12px; color:var(--muted); margin-top:2px; }
+.settingsStatus{
+  margin-top:8px;
+  line-height:1.4;
+}
+.settingsStatus.status-pending{ color:#f0c36d; }
+.settingsStatus.status-saving{ color:#89b3ff; }
+.settingsStatus.status-ok{ color:#82d49a; }
+.settingsStatus.status-error{ color:#ff8f8f; }
 
 .field{ display:block; margin-bottom:10px; }
 .field .label{ font-size:12px; color:var(--muted); margin-bottom:6px; }

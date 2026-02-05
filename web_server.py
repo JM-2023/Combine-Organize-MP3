@@ -113,7 +113,7 @@ def _load_config_file() -> Dict[str, Any]:
 @dataclass
 class PersistedState:
     version: int = 1
-    settings: Dict[str, Any] = field(default_factory=lambda: {"timezone": "Asia/Shanghai", "max_workers": 4})
+    settings: Dict[str, Any] = field(default_factory=lambda: {"timezone": "Asia/Shanghai", "max_workers": 4, "cutoff_hour": 4})
 
     @classmethod
     def load(cls, path: Path) -> "PersistedState":
@@ -129,9 +129,14 @@ class PersistedState:
                 if isinstance(settings, dict):
                     tz = settings.get("timezone", state.settings["timezone"])
                     mw = settings.get("max_workers", state.settings["max_workers"])
+                    cutoff = settings.get("cutoff_hour", state.settings["cutoff_hour"])
                     state.settings["timezone"] = str(tz)
                     try:
                         state.settings["max_workers"] = int(mw)
+                    except (TypeError, ValueError):
+                        pass
+                    try:
+                        state.settings["cutoff_hour"] = max(0, min(23, int(cutoff)))
                     except (TypeError, ValueError):
                         pass
             return state
@@ -178,15 +183,23 @@ class AudioToolboxApp:
         if not self.state_path.exists():
             default_tz = self._base_config.get("default_timezone", self._persisted.settings["timezone"])
             default_workers = self._base_config.get("max_workers", self._persisted.settings["max_workers"])
+            default_cutoff = self._base_config.get("cutoff_hour", self._persisted.settings["cutoff_hour"])
             self._persisted.settings["timezone"] = str(default_tz)
             try:
                 self._persisted.settings["max_workers"] = int(default_workers)
             except (TypeError, ValueError):
                 pass
+            try:
+                self._persisted.settings["cutoff_hour"] = max(0, min(23, int(default_cutoff)))
+            except (TypeError, ValueError):
+                pass
             self._save_state()
 
         self.processor = AudioProcessor(self._base_config, max_workers=self._persisted.settings.get("max_workers", 4))
-        self.organizer = FileOrganizer(self._persisted.settings.get("timezone", "Asia/Shanghai"))
+        self.organizer = FileOrganizer(
+            self._persisted.settings.get("timezone", "Asia/Shanghai"),
+            cutoff_hour=self._persisted.settings.get("cutoff_hour", 4),
+        )
 
         # Session-only merged state (matches desktop behavior: resets on restart)
         self._session_merged_files: Set[str] = set()
@@ -221,12 +234,16 @@ class AudioToolboxApp:
     def _save_state(self) -> None:
         _atomic_write_json(self.state_path, self._persisted.dump())
 
-    def set_settings(self, timezone: str, max_workers: int) -> None:
+    def set_settings(self, timezone: str, max_workers: int, cutoff_hour: int) -> None:
         with self._lock:
             self._persisted.settings["timezone"] = str(timezone)
             self._persisted.settings["max_workers"] = int(max_workers)
+            self._persisted.settings["cutoff_hour"] = max(0, min(23, int(cutoff_hour)))
             self.processor.max_workers = int(max_workers)
-            self.organizer = FileOrganizer(str(timezone))
+            self.organizer = FileOrganizer(
+                str(timezone),
+                cutoff_hour=self._persisted.settings["cutoff_hour"],
+            )
             self._save_state()
             if not self.busy():
                 self._refresh_files_cache(force=True)
@@ -363,17 +380,21 @@ class AudioToolboxApp:
                 date_key = str(params.get("date_key") or "").strip()
                 if not date_key:
                     return HTTPStatus.BAD_REQUEST, {"error": "Missing date_key"}
-                task = self.processor.create_merge_task_for_date(date_key, Path.cwd())
-                if not task:
-                    adjusted_files = []
-                    for f in self.processor.library.files:
-                        if f.state != FileState.UNPROCESSED:
-                            continue
-                        adjusted = self.organizer.timezone_adapter.get_adjusted_date(f.timestamp).strftime("%Y-%m-%d")
-                        if adjusted == date_key and f.is_audio:
-                            adjusted_files.append(f)
-                    if adjusted_files:
-                        task = ProcessingTask(task_type=TaskType.MERGE, files=sorted(adjusted_files, key=lambda x: x.timestamp), output_dir=Path.cwd())
+                adjusted_files = []
+                for f in self.processor.library.files:
+                    if f.state != FileState.UNPROCESSED:
+                        continue
+                    if not f.is_audio:
+                        continue
+                    adjusted = self.organizer.timezone_adapter.get_adjusted_date(f.timestamp).strftime("%Y-%m-%d")
+                    if adjusted == date_key:
+                        adjusted_files.append(f)
+                if adjusted_files:
+                    task = ProcessingTask(
+                        task_type=TaskType.MERGE,
+                        files=sorted(adjusted_files, key=lambda x: x.timestamp),
+                        output_dir=Path.cwd(),
+                    )
                 if not task:
                     return HTTPStatus.BAD_REQUEST, {"error": "No files", "message": f"No unmerged files for {date_key}"}
             elif task_enum == TaskType.IMPORT:
@@ -532,7 +553,12 @@ class RequestHandler(BaseHTTPRequestHandler):
             except (TypeError, ValueError):
                 mw = 4
             mw = max(1, min(16, mw))
-            self.app.set_settings(tz, mw)
+            try:
+                cutoff_hour = int(body.get("cutoff_hour") if body.get("cutoff_hour") is not None else 4)
+            except (TypeError, ValueError):
+                cutoff_hour = 4
+            cutoff_hour = max(0, min(23, cutoff_hour))
+            self.app.set_settings(tz, mw, cutoff_hour)
             _json_response(self, HTTPStatus.OK, {"ok": True, "settings": self.app.settings()})
             return
 

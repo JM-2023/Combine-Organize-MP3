@@ -11,9 +11,10 @@ const TIMEZONES = [
 const state = {
   cwd: "",
   busy: false,
-  settings: { timezone: "Asia/Shanghai", max_workers: 4 },
+  settings: { timezone: "Asia/Shanghai", max_workers: 4, cutoff_hour: 4 },
   groups: [],
   selected: new Set(),
+  settingsSaveInFlight: false,
   currentTaskId: null,
   lastHandledFinishedTaskId: null,
   pollTimer: null,
@@ -32,13 +33,15 @@ function setBusy(busy) {
     pill.classList.remove("busy");
   }
 
-  for (const id of ["importBtn","convertBtn","mergeBtn","silenceBtn","organizeBtn","refreshBtn","saveSettingsBtn"]) {
+  for (const id of ["importBtn","convertBtn","mergeBtn","silenceBtn","organizeBtn","refreshBtn"]) {
     const el = qs(id);
     if (el) el.disabled = state.busy;
   }
-  for (const id of ["timezoneSelect", "threadsInput"]) {
+  const saveBtn = qs("saveSettingsBtn");
+  if (saveBtn) saveBtn.disabled = state.busy || state.settingsSaveInFlight;
+  for (const id of ["timezoneSelect", "threadsInput", "cutoffHourInput"]) {
     const el = qs(id);
-    if (el) el.disabled = state.busy;
+    if (el) el.disabled = state.busy || state.settingsSaveInFlight;
   }
   for (const btn of document.querySelectorAll("[data-merge-by-date]")) {
     btn.disabled = state.busy;
@@ -47,6 +50,19 @@ function setBusy(busy) {
 
 function updateSelectionHint() {
   qs("selectionHint").textContent = `${state.selected.size} selected`;
+}
+
+function setSettingsStatus(statusClass, text) {
+  const el = qs("settingsStatus");
+  if (!el) return;
+  el.classList.remove("status-pending", "status-saving", "status-ok", "status-error");
+  if (statusClass) el.classList.add(`status-${statusClass}`);
+  el.textContent = text;
+}
+
+function markSettingsDirty() {
+  if (state.busy || state.settingsSaveInFlight) return;
+  setSettingsStatus("pending", "Settings changed. Saving soon...");
 }
 
 function escapeHtml(s) {
@@ -132,6 +148,8 @@ function applySettingsToUI() {
   tzSel.innerHTML = zones.map(tz => `<option value="${escapeHtml(tz)}">${escapeHtml(tz)}</option>`).join("");
   tzSel.value = currentTz;
   qs("threadsInput").value = String(state.settings.max_workers || 4);
+  const cutoff = Number(state.settings.cutoff_hour);
+  qs("cutoffHourInput").value = String(Number.isFinite(cutoff) ? Math.max(0, Math.min(23, cutoff)) : 4);
 }
 
 async function refreshAll() {
@@ -251,15 +269,37 @@ async function onOrganize() {
   await startTask({ type: "ORGANIZE", params: { create_archive: true } });
 }
 
-async function onSaveSettings() {
+async function onSaveSettings(trigger = "manual") {
+  if (state.settingsSaveInFlight) return;
   const tz = qs("timezoneSelect").value;
   const mw = Number(qs("threadsInput").value || "4");
   const maxWorkers = Math.max(1, Math.min(16, isFinite(mw) ? mw : 4));
+  const ch = Number(qs("cutoffHourInput").value || "4");
+  const cutoffHour = Math.max(0, Math.min(23, isFinite(ch) ? ch : 4));
+  const saveBtn = qs("saveSettingsBtn");
+  const originalLabel = saveBtn ? saveBtn.textContent : "Save Settings";
+  state.settingsSaveInFlight = true;
+  if (saveBtn) saveBtn.textContent = "Saving...";
+  setBusy(state.busy);
+  setSettingsStatus("saving", "Applying settings...");
   try {
-    await apiPost("/api/settings", { timezone: tz, max_workers: maxWorkers });
+    const resp = await apiPost("/api/settings", { timezone: tz, max_workers: maxWorkers, cutoff_hour: cutoffHour });
+    if (resp && resp.settings) state.settings = resp.settings;
     await refreshAll();
+    const applied = state.settings || {};
+    const ts = new Date().toLocaleTimeString();
+    setSettingsStatus(
+      "ok",
+      `Applied at ${ts}: ${applied.timezone}, threads ${applied.max_workers}, cutoff ${applied.cutoff_hour}.`
+    );
   } catch (e) {
-    alert(e.message || String(e));
+    const msg = e.message || String(e);
+    setSettingsStatus("error", `Save failed: ${msg}`);
+    if (trigger === "manual") alert(msg);
+  } finally {
+    state.settingsSaveInFlight = false;
+    if (saveBtn) saveBtn.textContent = originalLabel;
+    setBusy(state.busy);
   }
 }
 
@@ -318,20 +358,32 @@ async function init() {
   qs("mergeBtn").addEventListener("click", onMergeSelected);
   qs("silenceBtn").addEventListener("click", onSilence);
   qs("organizeBtn").addEventListener("click", onOrganize);
-  qs("saveSettingsBtn").addEventListener("click", onSaveSettings);
+  qs("saveSettingsBtn").addEventListener("click", () => onSaveSettings("manual"));
   qs("selectAllBtn").addEventListener("click", () => setAll(true));
   qs("deselectAllBtn").addEventListener("click", () => setAll(false));
 
   // Auto-save settings on change (prevents "reverting" when user forgets to click Save)
   const autoSave = debounce(() => {
     if (state.busy) return;
-    onSaveSettings();
+    onSaveSettings("auto");
   }, 350);
-  qs("timezoneSelect").addEventListener("change", autoSave);
-  qs("threadsInput").addEventListener("change", autoSave);
+  qs("timezoneSelect").addEventListener("change", () => {
+    markSettingsDirty();
+    autoSave();
+  });
+  qs("threadsInput").addEventListener("change", () => {
+    markSettingsDirty();
+    autoSave();
+  });
   qs("threadsInput").addEventListener("blur", autoSave);
+  qs("cutoffHourInput").addEventListener("change", () => {
+    markSettingsDirty();
+    autoSave();
+  });
+  qs("cutoffHourInput").addEventListener("blur", autoSave);
 
   applySettingsToUI();
+  setSettingsStatus("ok", "Settings loaded.");
   await refreshAll();
   ensurePolling();
 }

@@ -44,7 +44,9 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         super().__init__()
         self.config = config or {}
         self.processor = AudioProcessor(config)
-        self.organizer = FileOrganizer(self.config.get('default_timezone', 'Asia/Shanghai'))
+        self._timezone = str(self.config.get('default_timezone', 'Asia/Shanghai'))
+        self._cutoff_hour = self._coerce_cutoff_hour(self.config.get('cutoff_hour', 4))
+        self.organizer = FileOrganizer(self._timezone, cutoff_hour=self._cutoff_hour)
         self.presenter = FilePresenter()
         self.current_thread = None
         
@@ -67,6 +69,13 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
 
     def _clamp(self, value: float, min_value: float, max_value: float) -> float:
         return max(min_value, min(value, max_value))
+
+    def _coerce_cutoff_hour(self, value) -> int:
+        try:
+            value = int(value)
+        except (TypeError, ValueError):
+            return 4
+        return max(0, min(23, value))
 
     def _compute_ui_scale(self) -> float:
         base_scale = self.config.get("ui_scale", 1.0)
@@ -369,7 +378,7 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
             "Timezone:",
             ["UTC", "US/Eastern", "US/Pacific", "Europe/London", 
              "Asia/Tokyo", "Asia/Shanghai", "Australia/Sydney"],
-            self.config.get('default_timezone', 'Asia/Shanghai'),
+            self._timezone,
             self.on_timezone_changed
         )
         
@@ -378,6 +387,13 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
             1, 16,
             self.processor.max_workers,
             self.on_thread_changed
+        )
+
+        self.cutoff_spin = self.settings.add_spin(
+            "Cutoff Hour:",
+            0, 23,
+            self._cutoff_hour,
+            self.on_cutoff_changed
         )
         
         layout.addWidget(self.settings)
@@ -414,7 +430,7 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         groups = self.organizer.group_files(files)
         
         for group in groups:
-            parent = self.file_tree.add_group(group.date_key, self.config.get('default_timezone', 'Asia/Shanghai'))
+            parent = self.file_tree.add_group(group.date_key, self.organizer.timezone_adapter.timezone)
             for file in group.files:
                 file_data = self.presenter.present(file)
                 self.file_tree.add_file(parent, file_data)
@@ -427,7 +443,13 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
         self.file_tree.set_all_checked(False)
     
     def on_timezone_changed(self, tz):
-        self.organizer = FileOrganizer(tz)
+        self._timezone = str(tz)
+        self.organizer = FileOrganizer(self._timezone, cutoff_hour=self._cutoff_hour)
+        self.refresh()
+
+    def on_cutoff_changed(self, cutoff_hour):
+        self._cutoff_hour = self._coerce_cutoff_hour(cutoff_hour)
+        self.organizer = FileOrganizer(self._timezone, cutoff_hour=self._cutoff_hour)
         self.refresh()
     
     def on_thread_changed(self, count):
@@ -534,12 +556,26 @@ class AudioToolboxGUI(QtWidgets.QMainWindow):
             item = item.parent()
         
         date_key = item.text(0).replace("📅 ", "").split(" (")[0]
-        
-        task = self.processor.create_merge_task_for_date(date_key)
-        if not task:
+
+        files = []
+        for audio_file in self.processor.library.files:
+            if audio_file.state != FileState.UNPROCESSED:
+                continue
+            if not audio_file.is_audio:
+                continue
+            adjusted = self.organizer.timezone_adapter.get_adjusted_date(audio_file.timestamp).strftime("%Y-%m-%d")
+            if adjusted == date_key:
+                files.append(audio_file)
+
+        if not files:
             QtWidgets.QMessageBox.information(self, "No Files", f"No files for {date_key}")
             return
-        
+
+        task = ProcessingTask(
+            task_type=TaskType.MERGE,
+            files=sorted(files, key=lambda f: f.timestamp),
+            output_dir=Path.cwd()
+        )
         self.run_task(task)
     
     def remove_silence(self):

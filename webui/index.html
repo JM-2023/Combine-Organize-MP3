@@ -63,7 +63,13 @@
               <div class="label">Threads</div>
               <input id="threadsInput" type="number" min="1" max="16" step="1" />
             </label>
+            <label class="field">
+              <div class="label">Cutoff Hour</div>
+              <input id="cutoffHourInput" type="number" min="0" max="23" step="1" />
+            </label>
+            <div class="hint">Files before cutoff belong to previous day.</div>
             <button class="btn secondary" id="saveSettingsBtn">Save Settings</button>
+            <div class="hint settingsStatus" id="settingsStatus" aria-live="polite">Settings not saved yet.</div>
           </div>
 
           <div class="group">
@@ -92,4 +98,3 @@
     <script src="/app.js"></script>
   </body>
 </html>
-
