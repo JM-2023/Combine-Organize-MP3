@@ -48,6 +48,20 @@ class AudioProcessor:
         )
         self.filename_comment_pattern = re.compile(r'\([^)]*\)|（[^）]*）')
 
+    def _make_collision_safe_path(self, desired_path: Path, reserved_paths: Optional[Set[Path]] = None) -> Path:
+        """Return a non-conflicting path by appending numeric suffixes like ' (1)'."""
+        reserved = reserved_paths if reserved_paths is not None else set()
+        candidate = desired_path
+        index = 1
+
+        while candidate.exists() or candidate in reserved:
+            candidate = desired_path.with_name(
+                f"{desired_path.stem} ({index}){desired_path.suffix}"
+            )
+            index += 1
+
+        return candidate
+
     def _normalize_comment_group(self, group: str) -> str:
         """Normalize a filename comment group to ASCII parentheses, e.g. （备注） -> (备注)."""
         group = group.strip()
@@ -204,9 +218,22 @@ class AudioProcessor:
             progress_callback(f"Importing from: {source_dir}")
         
         imported = []
-        for file_path in source_dir.glob('*.mp4'):
-            dest_path = output_dir / file_path.name
+        reserved_paths: Set[Path] = set()
+        for file_path in sorted(source_dir.glob('*.mp4')):
+            desired_path = output_dir / file_path.name
             try:
+                if file_path.resolve() == desired_path.resolve():
+                    if progress_callback:
+                        progress_callback(f"Already in destination: {file_path.name}")
+                    continue
+            except Exception:
+                pass
+
+            dest_path = self._make_collision_safe_path(desired_path, reserved_paths)
+            reserved_paths.add(dest_path)
+            try:
+                if progress_callback and dest_path != desired_path:
+                    progress_callback(f"Name conflict, importing as: {dest_path.name}")
                 file_path.rename(dest_path)
                 imported.append(dest_path)
                 if progress_callback:
@@ -229,12 +256,19 @@ class AudioProcessor:
         
         output_files = []
         processed = 0
+        reserved_paths: Set[Path] = set()
         
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {}
             for audio_file in task.files:
                 if audio_file.format != 'mp3':
-                    output_path = task.output_dir / f"{audio_file.path.stem}.mp3"
+                    desired_path = task.output_dir / f"{audio_file.path.stem}.mp3"
+                    output_path = self._make_collision_safe_path(desired_path, reserved_paths)
+                    reserved_paths.add(output_path)
+                    if progress_callback and output_path != desired_path:
+                        progress_callback(
+                            f"Name conflict for {audio_file.basename}, converting as: {output_path.name}"
+                        )
                     future = executor.submit(self.tools.convert_to_mp3, 
                                            audio_file.path, output_path)
                     futures[future] = (audio_file, output_path)
@@ -287,10 +321,14 @@ class AudioProcessor:
         if comments:
             output_stem = f"{output_stem} {' '.join(comments)}"
         output_name = f"{output_stem}.mp3"
-        output_path = task.output_dir / output_name
+        desired_output = task.output_dir / output_name
+        output_path = self._make_collision_safe_path(desired_output)
         
         if progress_callback:
             progress_callback(f"Merging {len(sorted_files)} files...")
+            if output_path != desired_output:
+                progress_callback(f"Name conflict, merging to: {output_path.name}")
+            progress_callback("Merge mode: stream copy first, auto fallback to re-encode if needed")
         
         # Merge using FFmpeg
         input_paths = [f.path for f in sorted_files]
@@ -316,6 +354,7 @@ class AudioProcessor:
         
         output_files = []
         processed = 0
+        reserved_paths: Set[Path] = set()
         
         # Get silence parameters (using original working values)
         threshold = task.params.get('threshold', '-55dB')
@@ -324,7 +363,13 @@ class AudioProcessor:
         with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
             futures = {}
             for audio_file in task.files:
-                output_path = task.output_dir / f"nosilence_{audio_file.path.name}"
+                desired_path = task.output_dir / f"nosilence_{audio_file.path.name}"
+                output_path = self._make_collision_safe_path(desired_path, reserved_paths)
+                reserved_paths.add(output_path)
+                if progress_callback and output_path != desired_path:
+                    progress_callback(
+                        f"Name conflict for {audio_file.basename}, output as: {output_path.name}"
+                    )
                 future = executor.submit(self.tools.remove_silence,
                                        audio_file.path, output_path,
                                        threshold, duration)
@@ -400,12 +445,20 @@ class AudioProcessor:
                 date_dir.mkdir(parents=True, exist_ok=True)
             else:
                 continue
+
+            reserved_destinations: Set[Path] = set()
             
             # Move all source files to the date directory
             for file in sorted_files:
                 try:
-                    dest = date_dir / file.path.name
+                    desired_dest = date_dir / file.path.name
+                    dest = self._make_collision_safe_path(desired_dest, reserved_destinations)
+                    reserved_destinations.add(dest)
                     if progress_callback:
+                        if dest != desired_dest:
+                            progress_callback(
+                                f"Name conflict in {folder_name}/, moving as: {dest.name}"
+                            )
                         progress_callback(f"Moving {file.basename} to {folder_name}/")
                     file.path.rename(dest)
                     file.path = dest  # Update path in model
@@ -422,7 +475,10 @@ class AudioProcessor:
             # Create archive if requested  
             if task.params.get('create_archive', False):
                 archive_suffix = self.tools.preferred_archive_suffix()
-                archive_path = task.output_dir / f"{folder_name}{archive_suffix}"
+                desired_archive = task.output_dir / f"{folder_name}{archive_suffix}"
+                archive_path = self._make_collision_safe_path(desired_archive)
+                if progress_callback and archive_path != desired_archive:
+                    progress_callback(f"Archive exists, creating as: {archive_path.name}")
                 if self.tools.create_archive(date_dir, archive_path):
                     if progress_callback:
                         progress_callback(f"Created archive: {archive_path.name}")

@@ -8,6 +8,9 @@ const TIMEZONES = [
   "Australia/Sydney",
 ];
 
+const UI_SCALE_MIN = 0.72;
+const UI_SCALE_MAX = 1.0;
+
 const state = {
   cwd: "",
   busy: false,
@@ -18,6 +21,7 @@ const state = {
   currentTaskId: null,
   lastHandledFinishedTaskId: null,
   pollTimer: null,
+  fitUiRaf: null,
 };
 
 function qs(id) { return document.getElementById(id); }
@@ -58,6 +62,7 @@ function setSettingsStatus(statusClass, text) {
   el.classList.remove("status-pending", "status-saving", "status-ok", "status-error");
   if (statusClass) el.classList.add(`status-${statusClass}`);
   el.textContent = text;
+  scheduleFitControlsUi();
 }
 
 function markSettingsDirty() {
@@ -72,6 +77,54 @@ function escapeHtml(s) {
     .replaceAll(">","&gt;")
     .replaceAll("\"","&quot;")
     .replaceAll("'","&#039;");
+}
+
+function controlsFitInViewport() {
+  const body = document.querySelector(".controls > .panelBody");
+  if (!body) return true;
+  return body.scrollHeight <= body.clientHeight + 1;
+}
+
+function fitControlsUiScale() {
+  const root = document.documentElement;
+  if (window.matchMedia("(max-width: 980px)").matches) {
+    root.style.setProperty("--ui-scale", "1");
+    return;
+  }
+
+  root.style.setProperty("--ui-scale", String(UI_SCALE_MAX));
+  if (controlsFitInViewport()) return;
+
+  root.style.setProperty("--ui-scale", String(UI_SCALE_MIN));
+  if (!controlsFitInViewport()) {
+    // Fallback: keep minimum readable density and rely on panel scrolling.
+    return;
+  }
+
+  let low = UI_SCALE_MIN;
+  let high = UI_SCALE_MAX;
+  let best = UI_SCALE_MIN;
+
+  for (let i = 0; i < 10; i += 1) {
+    const mid = (low + high) / 2;
+    root.style.setProperty("--ui-scale", mid.toFixed(4));
+    if (controlsFitInViewport()) {
+      best = mid;
+      low = mid;
+    } else {
+      high = mid;
+    }
+  }
+
+  root.style.setProperty("--ui-scale", best.toFixed(3));
+}
+
+function scheduleFitControlsUi() {
+  if (state.fitUiRaf) cancelAnimationFrame(state.fitUiRaf);
+  state.fitUiRaf = requestAnimationFrame(() => {
+    state.fitUiRaf = null;
+    fitControlsUiScale();
+  });
 }
 
 async function apiGet(path) {
@@ -167,12 +220,16 @@ async function refreshAll() {
   state.selected = new Set();
   updateSelectionHint();
   renderFiles();
+  scheduleFitControlsUi();
 }
 
 function setLog(lines) {
   const box = qs("logBox");
-  box.textContent = (lines || []).join("\n");
+  const nextText = (lines || []).join("\n");
+  if (box.textContent === nextText) return;
+  box.textContent = nextText;
   box.scrollTop = box.scrollHeight;
+  scheduleFitControlsUi();
 }
 
 async function pollTask() {
@@ -381,10 +438,12 @@ async function init() {
     autoSave();
   });
   qs("cutoffHourInput").addEventListener("blur", autoSave);
+  window.addEventListener("resize", debounce(scheduleFitControlsUi, 80));
 
   applySettingsToUI();
   setSettingsStatus("ok", "Settings loaded.");
   await refreshAll();
+  scheduleFitControlsUi();
   ensurePolling();
 }
 

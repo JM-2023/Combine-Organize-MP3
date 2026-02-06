@@ -7,8 +7,10 @@ Professional audio file management with Claude-themed modern UI.
 - **Import** - Auto-detect and import OBS recordings
 - **Convert** - MP4/MKV to MP3 conversion with FFmpeg
 - **Merge** - Combine multiple audio files by selection or date
+- **Resilient Merge** - Auto fallback to re-encode when stream-copy merge is incompatible
 - **Silence Removal** - Clean up recordings automatically
 - **Organize** - Group files by date with timezone support
+- **Safe Outputs** - Never overwrite existing files; auto-append numeric suffixes
 - **Modern UI** - Claude's signature orange theme with dark mode
 
 ## Quick Start
@@ -46,7 +48,8 @@ python3 web_server.py
 ### Merge Details
 
 - Inputs are sorted chronologically by the extracted timestamp.
-- Merge uses FFmpeg concat demuxer with stream copy (`-c copy`) to avoid re-encoding.
+- Merge first tries FFmpeg concat demuxer with stream copy (`-c copy`) for speed.
+- If stream copy fails (e.g., incompatible inputs), it automatically retries with MP3 re-encode.
 - A temporary `concat_list.txt` is created next to the output and removed after the merge completes.
 
 ### Merge Output Filename Rules
@@ -58,6 +61,7 @@ python3 web_server.py
   - If a filename contains multiple groups, all groups are appended.
   - Duplicate groups across multiple inputs are de-duplicated (first-seen order).
 - Example: `20251226 10-00 (intro) (Q&A).mp3`
+- Collision-safe naming: if the target output already exists, a numeric suffix is appended, e.g. `20251226 10-00 (intro) (1).mp3`.
 
 ### Merged Output Detection
 

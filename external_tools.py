@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import logging
 from pathlib import Path
-from typing import Optional, List, Tuple
+from typing import Optional, List
 import platform
 import os
 import zipfile
@@ -99,6 +99,24 @@ class ToolManager:
         
         cmd = [str(self._sevenzip_path)] + args
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+    def _ffmpeg_error_tail(self, result: subprocess.CompletedProcess, max_lines: int = 3) -> str:
+        """Return a short, useful FFmpeg stderr tail for logs."""
+        stderr = (result.stderr or "").strip()
+        if not stderr:
+            return "no stderr output"
+        lines = [line.strip() for line in stderr.splitlines() if line.strip()]
+        if not lines:
+            return "no stderr output"
+        return " | ".join(lines[-max_lines:])
+
+    def _cleanup_partial_output(self, output_file: Path) -> None:
+        """Best-effort cleanup of partial outputs produced by failed FFmpeg runs."""
+        try:
+            if output_file.exists():
+                output_file.unlink()
+        except Exception as e:
+            logging.warning(f"Failed to clean up partial output {output_file}: {e}")
     
     def convert_to_mp3(self, input_file: Path, output_file: Path) -> bool:
         """Convert any audio/video file to MP3"""
@@ -111,14 +129,16 @@ class ToolManager:
                 '-i', str(input_file),
                 '-acodec', 'libmp3lame',
                 '-ab', '192k',
-                '-y',  # Overwrite output
+                '-n',  # Never overwrite existing output
                 str(output_file)
             ]
-            result = self.run_ffmpeg(args)
-            return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            logging.error(f"FFmpeg conversion failed: {e}")
-            return False
+            result = self.run_ffmpeg(args, check=False)
+            if result.returncode != 0:
+                logging.error(
+                    f"FFmpeg conversion failed ({input_file.name}): {self._ffmpeg_error_tail(result)}"
+                )
+                return False
+            return True
         except Exception as e:
             logging.error(f"Conversion error: {e}")
             return False
@@ -137,20 +157,27 @@ class ToolManager:
             args = [
                 '-i', str(input_file),
                 '-af', filter_str,
-                '-y',
+                '-n',
                 str(output_file)
             ]
-            result = self.run_ffmpeg(args)
-            return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Silence removal failed: {e}")
-            return False
+            result = self.run_ffmpeg(args, check=False)
+            if result.returncode != 0:
+                logging.error(
+                    f"Silence removal failed ({input_file.name}): {self._ffmpeg_error_tail(result)}"
+                )
+                return False
+            return True
         except Exception as e:
             logging.error(f"Silence removal error: {e}")
             return False
     
     def merge_audio_files(self, input_files: List[Path], output_file: Path) -> bool:
-        """Merge multiple audio files into one"""
+        """Merge multiple audio files into one.
+
+        Strategy:
+        1) Fast path: concat demuxer + stream copy (no re-encode).
+        2) Fallback: concat demuxer + MP3 re-encode for mixed/incompatible inputs.
+        """
         if not self.has_ffmpeg:
             logging.error("FFmpeg not available for merging")
             return False
@@ -162,27 +189,55 @@ class ToolManager:
         try:
             # Create concat list file
             list_file = output_file.parent / "concat_list.txt"
-            with open(list_file, 'w') as f:
+            with open(list_file, 'w', encoding='utf-8') as f:
                 for file in input_files:
                     # FFmpeg concat demuxer format
                     f.write(f"file '{file.absolute()}'\n")
-            
-            args = [
+
+            copy_args = [
                 '-f', 'concat',
                 '-safe', '0',
                 '-i', str(list_file),
+                '-vn',
                 '-c', 'copy',
-                '-y',
+                '-n',
                 str(output_file)
             ]
-            result = self.run_ffmpeg(args)
-            
-            # Clean up temp file
-            list_file.unlink(missing_ok=True)
-            
-            return result.returncode == 0
-        except subprocess.CalledProcessError as e:
-            logging.error(f"Audio merge failed: {e}")
+            copy_result = self.run_ffmpeg(copy_args, check=False)
+            if copy_result.returncode == 0:
+                return True
+
+            logging.warning(
+                "Merge copy mode failed (%s): %s",
+                output_file.name,
+                self._ffmpeg_error_tail(copy_result),
+            )
+            self._cleanup_partial_output(output_file)
+
+            # Fallback: decode + re-encode to improve compatibility.
+            reencode_args = [
+                '-f', 'concat',
+                '-safe', '0',
+                '-i', str(list_file),
+                '-vn',
+                '-acodec', 'libmp3lame',
+                '-ab', '192k',
+                '-ar', '44100',
+                '-ac', '2',
+                '-n',
+                str(output_file)
+            ]
+            reencode_result = self.run_ffmpeg(reencode_args, check=False)
+            if reencode_result.returncode == 0:
+                logging.info(f"Merge succeeded using re-encode fallback: {output_file.name}")
+                return True
+
+            logging.error(
+                "Merge failed after fallback (%s): %s",
+                output_file.name,
+                self._ffmpeg_error_tail(reencode_result),
+            )
+            self._cleanup_partial_output(output_file)
             return False
         except Exception as e:
             logging.error(f"Merge error: {e}")
