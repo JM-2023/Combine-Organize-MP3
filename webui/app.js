@@ -174,7 +174,6 @@ function fileRowHtml(file) {
 function renderFiles() {
   const root = qs("filesRoot");
   root.innerHTML = "";
-  root.classList.add("filesRoot");
 
   for (const group of state.groups) {
     const swatch = group.color ? `<div class="swatch" style="background:${escapeHtml(group.color)}"></div>` : `<div class="swatch"></div>`;

@@ -1,5 +1,6 @@
 # Python
 __pycache__/
+.pycache/
 *.py[cod]
 *$py.class
 *.so
@@ -47,6 +48,7 @@ env/
 *.zip
 *.7z
 config.json
+.audio_toolbox/
 output/
 archive/
 

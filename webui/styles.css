@@ -120,6 +120,7 @@ body{
   overflow:hidden;
   min-height:0;
 }
+.files{ min-height:0; }
 .panelHeader{
   display:flex;
   justify-content:space-between;
@@ -135,8 +136,14 @@ body{
   padding:12px;
   min-height:0;
 }
-.files > .panelBody{ overflow:auto; }
+.files > .panelBody{
+  flex:1 1 auto;
+  overflow-y:auto;
+  overflow-x:hidden;
+  scrollbar-gutter:stable;
+}
 .controls > .panelBody{
+  flex:1 1 auto;
   overflow:auto;
   padding:calc(12px * var(--ui-scale));
 }
@@ -253,8 +260,12 @@ select:focus, input:focus{ border-color:rgba(220,136,98,0.7); }
   flex-direction:column;
   gap:12px;
 }
+.filesRoot > *{
+  flex:0 0 auto;
+}
 
 .dateGroup{
+  flex:0 0 auto;
   border:1px solid var(--border);
   border-radius:12px;
   overflow:hidden;
