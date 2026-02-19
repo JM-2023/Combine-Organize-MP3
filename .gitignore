@@ -39,8 +39,8 @@ env/
 *.swo
 
 # Project specific
-*.mp3
-*.mp4
+*.[mM][pP]3
+*.[mM][pP]4
 *.mkv
 *.wav
 *.flac
