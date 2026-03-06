@@ -37,7 +37,7 @@ function setBusy(busy) {
     pill.classList.remove("busy");
   }
 
-  for (const id of ["importBtn","convertBtn","mergeBtn","silenceBtn","organizeBtn","refreshBtn"]) {
+  for (const id of ["importBtn","convertBtn","mergeBtn","annotateBtn","silenceBtn","organizeBtn","refreshBtn"]) {
     const el = qs(id);
     if (el) el.disabled = state.busy;
   }
@@ -313,6 +313,12 @@ async function onMergeSelected() {
   await startTask({ type: "MERGE", paths });
 }
 
+async function onAnnotateTimeRange() {
+  const paths = selectedPaths();
+  if (!paths.length) return alert("Select some files first.");
+  await startTask({ type: "ANNOTATE_TIME_RANGE", paths });
+}
+
 async function onSilence() {
   const paths = selectedPaths();
   if (!paths.length) return alert("Select some files first.");
@@ -400,6 +406,8 @@ async function init() {
       return;
     }
 
+    if (e.target.closest("input[type='checkbox']")) return;
+
     const row = e.target.closest("[data-row-path]");
     if (!row) return;
     const p = row.getAttribute("data-row-path");
@@ -412,6 +420,7 @@ async function init() {
   qs("importBtn").addEventListener("click", onImport);
   qs("convertBtn").addEventListener("click", onConvert);
   qs("mergeBtn").addEventListener("click", onMergeSelected);
+  qs("annotateBtn").addEventListener("click", onAnnotateTimeRange);
   qs("silenceBtn").addEventListener("click", onSilence);
   qs("organizeBtn").addEventListener("click", onOrganize);
   qs("saveSettingsBtn").addEventListener("click", () => onSaveSettings("manual"));

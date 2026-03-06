@@ -5,9 +5,10 @@ Single dispatcher, no special cases.
 """
 import logging
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Optional, Callable, Dict, Any, Set
+import math
 import re
 
 from audio_models import (
@@ -32,6 +33,7 @@ class AudioProcessor:
             TaskType.CONVERT: self._convert_files,
             TaskType.MERGE: self._merge_files,
             TaskType.REMOVE_SILENCE: self._remove_silence,
+            TaskType.ANNOTATE_TIME_RANGE: self._annotate_time_range,
             TaskType.ORGANIZE: self._organize_files,
         }
         
@@ -47,6 +49,9 @@ class AudioProcessor:
             r'^(\d{8}) (\d{2}-\d{2})(?:\s*(?:\([^)]*\)|（[^）]*）))*\.mp3$'
         )
         self.filename_comment_pattern = re.compile(r'\([^)]*\)|（[^）]*）')
+        self.filename_datetime_token_pattern = re.compile(
+            r'(?P<date>\d{4}-\d{2}-\d{2})(?P<join>[_ ])(?P<time>\d{2}-\d{2}(?:-\d{2})?)'
+        )
 
     def _make_collision_safe_path(self, desired_path: Path, reserved_paths: Optional[Set[Path]] = None) -> Path:
         """Return a non-conflicting path by appending numeric suffixes like ' (1)'."""
@@ -84,6 +89,66 @@ class AudioProcessor:
                 comments.append(comment)
                 seen.add(comment)
         return comments
+
+    def _extract_filename_datetime_token(self, stem: str) -> Optional[Dict[str, Any]]:
+        """Extract a timestamp token from a filename stem."""
+        match = self.filename_datetime_token_pattern.search(stem)
+        if not match:
+            return None
+
+        date_str = match.group("date")
+        time_str = match.group("time")
+        has_seconds = time_str.count('-') == 2
+        dt_str = f"{date_str} {time_str.replace('-', ':')}"
+        dt_fmt = "%Y-%m-%d %H:%M:%S" if has_seconds else "%Y-%m-%d %H:%M"
+
+        try:
+            start = datetime.strptime(dt_str, dt_fmt)
+        except ValueError:
+            return None
+
+        return {
+            "start": start,
+        }
+
+    def _format_note_datetime(self, value: datetime) -> str:
+        """Format a note datetime using the compact merged-style timestamp."""
+        return value.strftime("%Y%m%d %H-%M")
+
+    def _round_range_start(self, value: datetime) -> datetime:
+        """Round a start time down to minute precision for note display."""
+        return value.replace(second=0, microsecond=0)
+
+    def _round_range_end(self, value: datetime) -> datetime:
+        """Round a calculated end time up to minute precision for note display."""
+        if value.second or value.microsecond:
+            return value.replace(second=0, microsecond=0) + timedelta(minutes=1)
+        return value.replace(microsecond=0)
+
+    def _build_time_range_comment_from_token(self, token: Dict[str, Any], duration_seconds: float) -> Optional[str]:
+        """Build a time-range comment like (YYYYMMDD HH-MM_HH-MM)."""
+        if duration_seconds is None or not math.isfinite(duration_seconds) or duration_seconds < 0:
+            return None
+
+        start = self._round_range_start(token["start"])
+        end = self._round_range_end(token["start"] + timedelta(seconds=duration_seconds))
+        start_text = self._format_note_datetime(start)
+        if start.date() == end.date():
+            return f"({start_text}_{end.strftime('%H-%M')})"
+        return f"({start_text}_{self._format_note_datetime(end)})"
+
+    def _build_time_range_comment(self, stem: str, duration_seconds: float) -> Optional[str]:
+        """Build a time-range comment from a filename stem."""
+        token = self._extract_filename_datetime_token(stem)
+        if not token:
+            return None
+        return self._build_time_range_comment_from_token(token, duration_seconds)
+
+    def _build_merge_output_stem(self, files: List[AudioFile]) -> str:
+        """Build the merged output stem using the first file timestamp and normalized comments."""
+        base = files[0].timestamp.strftime('%Y%m%d %H-%M')
+        comments = self._collect_filename_comments(files)
+        return f"{base}{''.join(comments)}" if comments else base
     
     def find_obs_save_location(self) -> Optional[Path]:
         """Find OBS default save location on macOS"""
@@ -313,13 +378,8 @@ class AudioProcessor:
         # Sort files chronologically
         sorted_files = sorted(task.files, key=lambda f: f.timestamp)
         
-        # Generate output filename: YYYYMMDD HH-MM (comments...).mp3
-        # Use the date and start time from the first file and preserve comment groups.
-        first_time = sorted_files[0].timestamp
-        output_stem = first_time.strftime('%Y%m%d %H-%M')
-        comments = self._collect_filename_comments(sorted_files)
-        if comments:
-            output_stem = f"{output_stem} {' '.join(comments)}"
+        # Generate output filename: YYYYMMDD HH-MM(comments...).mp3
+        output_stem = self._build_merge_output_stem(sorted_files)
         output_name = f"{output_stem}.mp3"
         desired_output = task.output_dir / output_name
         output_path = self._make_collision_safe_path(desired_output)
@@ -344,6 +404,56 @@ class AudioProcessor:
             success=success,
             output_files=[output_path] if success else [],
             processed_count=len(sorted_files) if success else 0
+        )
+
+    def _annotate_time_range(self, task: ProcessingTask,
+                            progress_callback: Optional[Callable] = None) -> TaskResult:
+        """Append a time-range comment to each selected filename."""
+        if not self.tools.has_ffprobe:
+            return TaskResult(task=task, success=False, error="ffprobe not available")
+
+        output_files = []
+        reserved_paths: Set[Path] = set()
+
+        for audio_file in task.files:
+            token = self._extract_filename_datetime_token(audio_file.path.stem)
+            if not token:
+                if progress_callback:
+                    progress_callback(f"Skipped {audio_file.basename}: filename timestamp not found")
+                continue
+
+            duration_seconds = self.tools.probe_duration_seconds(audio_file.path)
+            comment = self._build_time_range_comment_from_token(token, duration_seconds)
+            if not comment:
+                if progress_callback:
+                    progress_callback(f"Skipped {audio_file.basename}: could not determine duration")
+                continue
+
+            desired_path = audio_file.path.with_name(f"{audio_file.path.stem}{comment}{audio_file.path.suffix}")
+            output_path = self._make_collision_safe_path(desired_path, reserved_paths)
+            reserved_paths.add(output_path)
+
+            try:
+                if progress_callback and output_path != desired_path:
+                    progress_callback(
+                        f"Name conflict for {audio_file.basename}, renaming as: {output_path.name}"
+                    )
+                audio_file.path.rename(output_path)
+                audio_file.path = output_path
+                output_files.append(output_path)
+                if progress_callback:
+                    progress_callback(f"Annotated: {output_path.name}")
+            except Exception as e:
+                logging.error(f"Failed to annotate {audio_file.path}: {e}")
+
+        if not output_files:
+            return TaskResult(task=task, success=False, error="No files were annotated")
+
+        return TaskResult(
+            task=task,
+            success=True,
+            output_files=output_files,
+            processed_count=len(output_files)
         )
     
     def _remove_silence(self, task: ProcessingTask,

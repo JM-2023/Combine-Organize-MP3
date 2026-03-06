@@ -19,12 +19,14 @@ class ToolManager:
     def __init__(self, config: dict = None):
         self.config = config or {}
         self._ffmpeg_path = None
+        self._ffprobe_path = None
         self._sevenzip_path = None
         self._validate_tools()
     
     def _validate_tools(self):
         """Find and validate external tools once"""
         self._ffmpeg_path = self._find_tool('ffmpeg', self.config.get('ffmpeg_path'))
+        self._ffprobe_path = self._find_tool('ffprobe', self.config.get('ffprobe_path'))
         self._sevenzip_path = self._find_tool('7z', self.config.get('sevenzip_path'))
     
     def _find_tool(self, tool_name: str, config_path: Optional[str] = None) -> Optional[Path]:
@@ -70,6 +72,10 @@ class ToolManager:
     @property
     def has_ffmpeg(self) -> bool:
         return self._ffmpeg_path is not None
+
+    @property
+    def has_ffprobe(self) -> bool:
+        return self._ffprobe_path is not None
     
     @property
     def has_sevenzip(self) -> bool:
@@ -90,6 +96,14 @@ class ToolManager:
             raise RuntimeError("FFmpeg not available")
         
         cmd = [str(self._ffmpeg_path)] + args
+        return subprocess.run(cmd, capture_output=True, text=True, check=check)
+
+    def run_ffprobe(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
+        """Run ffprobe with given arguments"""
+        if not self.has_ffprobe:
+            raise RuntimeError("ffprobe not available")
+
+        cmd = [str(self._ffprobe_path)] + args
         return subprocess.run(cmd, capture_output=True, text=True, check=check)
     
     def run_sevenzip(self, args: List[str], check: bool = True) -> subprocess.CompletedProcess:
@@ -117,6 +131,38 @@ class ToolManager:
                 output_file.unlink()
         except Exception as e:
             logging.warning(f"Failed to clean up partial output {output_file}: {e}")
+
+    def probe_duration_seconds(self, input_file: Path) -> Optional[float]:
+        """Return media duration in seconds using ffprobe."""
+        if not self.has_ffprobe:
+            logging.error("ffprobe not available for duration probing")
+            return None
+
+        try:
+            args = [
+                '-v', 'error',
+                '-show_entries', 'format=duration',
+                '-of', 'default=noprint_wrappers=1:nokey=1',
+                str(input_file)
+            ]
+            result = self.run_ffprobe(args, check=False)
+            if result.returncode != 0:
+                logging.error("ffprobe failed for %s: %s", input_file.name, (result.stderr or "").strip() or "no stderr output")
+                return None
+
+            raw = (result.stdout or "").strip()
+            if not raw:
+                logging.error("ffprobe returned empty duration for %s", input_file.name)
+                return None
+
+            duration = float(raw)
+            if duration < 0:
+                logging.error("ffprobe returned negative duration for %s: %s", input_file.name, raw)
+                return None
+            return duration
+        except Exception as e:
+            logging.error(f"ffprobe duration probe failed for {input_file.name}: {e}")
+            return None
     
     def convert_to_mp3(self, input_file: Path, output_file: Path) -> bool:
         """Convert any audio/video file to MP3"""

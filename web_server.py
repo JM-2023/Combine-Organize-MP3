@@ -405,7 +405,7 @@ class AudioToolboxApp:
                 if not source_path.exists() or not source_path.is_dir():
                     return HTTPStatus.BAD_REQUEST, {"error": "Invalid source_dir", "message": "Directory does not exist"}
                 task = ProcessingTask(task_type=TaskType.IMPORT, files=[], output_dir=Path.cwd(), params={"source_dir": source_dir})
-            elif task_enum in {TaskType.CONVERT, TaskType.MERGE, TaskType.REMOVE_SILENCE}:
+            elif task_enum in {TaskType.CONVERT, TaskType.MERGE, TaskType.REMOVE_SILENCE, TaskType.ANNOTATE_TIME_RANGE}:
                 rel_paths = [str(p) for p in paths if isinstance(p, str)]
                 files, err = self._selectable_files_from_paths(rel_paths)
                 if err:
@@ -419,6 +419,10 @@ class AudioToolboxApp:
                 elif task_enum == TaskType.MERGE:
                     files = [f for f in files if f.is_audio]
                     task = ProcessingTask(task_type=TaskType.MERGE, files=files, output_dir=Path.cwd())
+                elif task_enum == TaskType.ANNOTATE_TIME_RANGE:
+                    if not files:
+                        return HTTPStatus.BAD_REQUEST, {"error": "No files selected"}
+                    task = ProcessingTask(task_type=TaskType.ANNOTATE_TIME_RANGE, files=files, output_dir=Path.cwd())
                 else:
                     files = [f for f in files if f.is_audio]
                     if not files:

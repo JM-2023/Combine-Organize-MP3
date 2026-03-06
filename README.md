@@ -7,6 +7,7 @@ Professional audio file management with Claude-themed modern UI.
 - **Import** - Auto-detect and import OBS recordings
 - **Convert** - MP4/MKV to MP3 conversion with FFmpeg
 - **Merge** - Combine multiple audio files by selection or date
+- **Time Notes (Web UI)** - Append compact `(YYYYMMDD HH-MM_HH-MM)` filename notes using media duration
 - **Resilient Merge** - Auto fallback to re-encode when stream-copy merge is incompatible
 - **Silence Removal** - Clean up recordings automatically
 - **Organize** - Group files by date with timezone support
@@ -60,8 +61,16 @@ python3 web_server.py
   - Output always uses ASCII parentheses `(...)` (fullwidth is normalized).
   - If a filename contains multiple groups, all groups are appended.
   - Duplicate groups across multiple inputs are de-duplicated (first-seen order).
-- Example: `20251226 10-00 (intro) (Q&A).mp3`
-- Collision-safe naming: if the target output already exists, a numeric suffix is appended, e.g. `20251226 10-00 (intro) (1).mp3`.
+- Example: `20251226 10-00(intro)(Q&A).mp3`
+- Collision-safe naming: if the target output already exists, a numeric suffix is appended, e.g. `20251226 10-00(intro) (1).mp3`.
+
+### Time Range Notes (Web UI)
+
+- The Web UI can append a time-range note to each selected file using the current filename timestamp plus the media duration from `ffprobe`.
+- Format: `原文件名(YYYYMMDD HH-MM_HH-MM).ext`
+- If the note crosses into the next day, the end expands to `YYYYMMDD HH-MM`.
+- Minute-precision filenames round the end time up to the next minute when needed.
+- Re-running the action appends another time-range note; existing text notes stay in place.
 
 ### Merged Output Detection
 
@@ -123,6 +132,7 @@ Optional `config.json`:
 ```json
 {
   "ffmpeg_path": null,        // Auto-detected
+  "ffprobe_path": null,       // Auto-detected
   "sevenzip_path": null,      // Auto-detected
   "max_workers": 4,           // Thread pool size
   "date_pattern": null,       // Optional filename timestamp regex override
@@ -140,6 +150,7 @@ Optional `config.json`:
 - Web UI: standard library only (no pip dependencies)
 - Desktop UI (optional): PyQt5
 - FFmpeg - Media conversion (auto-detected)
+- ffprobe - Media duration detection for Web UI time notes
 - 7-Zip - Optional for `.7z` archives (otherwise `.zip`)
 
 ## File Organization

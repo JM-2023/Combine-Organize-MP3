@@ -27,6 +27,7 @@ class TaskType(Enum):
     CONVERT = auto()
     MERGE = auto()
     REMOVE_SILENCE = auto()
+    ANNOTATE_TIME_RANGE = auto()
     ORGANIZE = auto()
 
 

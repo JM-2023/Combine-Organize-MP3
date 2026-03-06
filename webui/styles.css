@@ -12,6 +12,7 @@
   --import:#DC8862;
   --convert:#6B89E5;
   --merge:#5FB86E;
+  --annotate:#D2A34A;
   --silence:#B85F9E;
   --organize:#5FB8B8;
   --ui-scale:1;
@@ -224,6 +225,7 @@ body{
 .btn.action.import{ background:var(--import); }
 .btn.action.convert{ background:var(--convert); }
 .btn.action.merge{ background:var(--merge); }
+.btn.action.annotate{ background:var(--annotate); color:#1a1a1a; }
 .btn.action.silence{ background:var(--silence); }
 .btn.action.organize{ background:var(--organize); }
 
