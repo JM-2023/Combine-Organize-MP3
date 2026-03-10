@@ -275,6 +275,7 @@ class AudioToolboxApp:
         return {
             "path": rel,
             "timestamp": f.timestamp.isoformat(),
+            "format": f.format,
             "is_audio": bool(f.is_audio),
             "is_video": bool(f.is_video),
             "size_bytes": size_bytes,
@@ -295,7 +296,10 @@ class AudioToolboxApp:
             self.processor.scan_directory(Path.cwd())
             self._restore_session_merged_states()
 
-            files = self.organizer.prepare_files(self.processor.library.files)
+            files = self.organizer.prepare_files(
+                self.processor.library.files,
+                hide_videos_with_matching_mp3=False,
+            )
             groups = self.organizer.group_files(files)
 
             payload_groups = []

@@ -90,7 +90,7 @@ class FileOrganizer:
         self.colors = colors or self.DEFAULT_COLORS
         self._mp3_stems_cache = set()
     
-    def prepare_files(self, files: Set[AudioFile]) -> List[AudioFile]:
+    def prepare_files(self, files: Set[AudioFile], *, hide_videos_with_matching_mp3: bool = True) -> List[AudioFile]:
         """
         Prepare files for display:
         1. Filter out MP4s that have corresponding MP3s
@@ -103,11 +103,15 @@ class FileOrganizer:
         display_files = []
         for file in files:
             # Skip MP4 if MP3 exists
-            if file.is_video and file.path.stem in self._mp3_stems_cache:
+            if (
+                hide_videos_with_matching_mp3
+                and file.is_video
+                and file.path.stem in self._mp3_stems_cache
+            ):
                 continue
             display_files.append(file)
         
-        return sorted(display_files, key=lambda f: f.timestamp)
+        return sorted(display_files, key=lambda f: (f.timestamp, f.path.name.lower()))
     
     def group_files(self, files: List[AudioFile]) -> List[FileGroup]:
         """

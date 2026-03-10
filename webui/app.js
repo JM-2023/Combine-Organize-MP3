@@ -154,6 +154,10 @@ async function apiPost(path, payload) {
 function fileRowHtml(file) {
   const disabled = !!file.disabled;
   const styleClass = file.style ? String(file.style) : "normal";
+  const format = file.format ? String(file.format).toUpperCase() : "";
+  const mediaBadge = file.is_video && format
+    ? `<span class="mediaBadge mediaBadge-video">${escapeHtml(format)}</span>`
+    : "";
 
   const checked = state.selected.has(file.path) ? "checked" : "";
   const cb = file.checkable
@@ -163,7 +167,10 @@ function fileRowHtml(file) {
   return `
     <div class="fileRow ${disabled ? "disabled" : ""} style-${escapeHtml(styleClass)}" data-row-path="${escapeHtml(file.path)}" title="${escapeHtml(file.display || "")}">
       ${cb}
-      <div class="fileName">${escapeHtml(file.display || "")}</div>
+      <div class="fileName">
+        <span class="fileLabel">${escapeHtml(file.display || "")}</span>
+        ${mediaBadge}
+      </div>
       <div class="fileMeta">${escapeHtml(file.time || "")}</div>
       <div class="stateTag ${escapeHtml(styleClass)}" title="${escapeHtml(file.state || "")}">${escapeHtml(file.state || "")}</div>
       <div class="fileMeta">${escapeHtml(file.size || "")}</div>

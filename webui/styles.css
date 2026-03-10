@@ -305,11 +305,38 @@ select:focus, input:focus{ border-color:rgba(220,136,98,0.7); }
 .fileRow:hover{ background:rgba(58,58,58,0.35); }
 .fileRow.disabled{ opacity:0.55; }
 .fileName{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  min-width:0;
+}
+.fileLabel{
+  min-width:0;
   overflow:hidden;
   text-overflow:ellipsis;
   white-space:nowrap;
+  flex:1 1 auto;
 }
 .fileMeta{ font-size:12px; color:var(--muted); text-align:right; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+.mediaBadge{
+  flex:0 0 auto;
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  min-width:40px;
+  padding:2px 8px;
+  border-radius:999px;
+  border:1px solid rgba(107,137,229,0.45);
+  background:rgba(107,137,229,0.14);
+  color:#b9cbff;
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:0.06em;
+}
+.mediaBadge-video{
+  border-color:rgba(107,137,229,0.55);
+  background:rgba(107,137,229,0.16);
+}
 .stateTag{
   display:block;
   font-size:12px;

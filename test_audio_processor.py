@@ -83,6 +83,25 @@ class AudioProcessorNamingTests(unittest.TestCase):
             self.assertEqual(second_result.output_files[0].name, expected_name)
             self.assertTrue((root / expected_name).exists())
 
+    def test_annotate_time_range_keeps_mp4_extension_for_video_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source_path = root / "2026-03-06 09-00.mp4"
+            source_path.write_bytes(b"video")
+            video_file = AudioFile.from_path(source_path, datetime(2026, 3, 6, 9, 0))
+
+            self.processor.tools._ffprobe_path = Path("/mock/ffprobe")
+            self.processor.tools.probe_duration_seconds = lambda _path: 61
+
+            task = ProcessingTask(TaskType.ANNOTATE_TIME_RANGE, [video_file], root)
+            result = self.processor._annotate_time_range(task)
+
+            expected_name = "2026-03-06 09-00(20260306 09-00_09-02).mp4"
+            self.assertTrue(result.success)
+            self.assertEqual(result.processed_count, 1)
+            self.assertEqual(result.output_files[0].name, expected_name)
+            self.assertTrue((root / expected_name).exists())
+
     def test_merged_output_detection_accepts_spaced_and_unspaced_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
