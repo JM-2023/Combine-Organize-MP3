@@ -115,6 +115,10 @@ class AudioProcessor:
         """Format a note datetime using the compact merged-style timestamp."""
         return value.strftime("%Y%m%d %H-%M")
 
+    def _format_note_time(self, value: datetime) -> str:
+        """Format a note time for same-day short range display."""
+        return value.strftime("%H-%M")
+
     def _round_range_start(self, value: datetime) -> datetime:
         """Round a start time down to minute precision for note display."""
         return value.replace(second=0, microsecond=0)
@@ -126,15 +130,15 @@ class AudioProcessor:
         return value.replace(microsecond=0)
 
     def _build_time_range_comment_from_token(self, token: Dict[str, Any], duration_seconds: float) -> Optional[str]:
-        """Build a time-range comment like (YYYYMMDD HH-MM_HH-MM)."""
+        """Build a time-range comment like (09-00_09-23) or (23-58_20260307 00-02)."""
         if duration_seconds is None or not math.isfinite(duration_seconds) or duration_seconds < 0:
             return None
 
         start = self._round_range_start(token["start"])
         end = self._round_range_end(token["start"] + timedelta(seconds=duration_seconds))
-        start_text = self._format_note_datetime(start)
+        start_text = self._format_note_time(start)
         if start.date() == end.date():
-            return f"({start_text}_{end.strftime('%H-%M')})"
+            return f"({start_text}_{self._format_note_time(end)})"
         return f"({start_text}_{self._format_note_datetime(end)})"
 
     def _build_time_range_comment(self, stem: str, duration_seconds: float) -> Optional[str]:

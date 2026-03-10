@@ -7,7 +7,7 @@ Professional audio file management with Claude-themed modern UI.
 - **Import** - Auto-detect and import OBS recordings
 - **Convert** - MP4/MKV to MP3 conversion with FFmpeg
 - **Merge** - Combine multiple audio files by selection or date
-- **Time Notes (Web UI)** - Append compact `(YYYYMMDD HH-MM_HH-MM)` filename notes using media duration
+- **Time Notes (Web UI)** - Append compact `(09-00_09-23)` filename notes using media duration
 - **Resilient Merge** - Auto fallback to re-encode when stream-copy merge is incompatible
 - **Silence Removal** - Clean up recordings automatically
 - **Organize** - Group files by date with timezone support
@@ -67,8 +67,8 @@ python3 web_server.py
 ### Time Range Notes (Web UI)
 
 - The Web UI can append a time-range note to each selected file using the current filename timestamp plus the media duration from `ffprobe`.
-- Format: `原文件名(YYYYMMDD HH-MM_HH-MM).ext`
-- If the note crosses into the next day, the end expands to `YYYYMMDD HH-MM`.
+- Format: `原文件名(09-00_09-23).ext`
+- If the note crosses into the next day, the end expands to `YYYYMMDD HH-MM`, for example `原文件名(23-58_20260307 00-02).ext`.
 - Minute-precision filenames round the end time up to the next minute when needed.
 - Re-running the action appends another time-range note; existing text notes stay in place.
 

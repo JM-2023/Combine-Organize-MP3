@@ -13,15 +13,15 @@ class AudioProcessorNamingTests(unittest.TestCase):
 
     def test_build_time_range_comment_uses_minute_precision_and_rounds_up(self):
         comment = self.processor._build_time_range_comment("2026-03-06 09-00", 61)
-        self.assertEqual(comment, "(20260306 09-00_09-02)")
+        self.assertEqual(comment, "(09-00_09-02)")
 
     def test_build_time_range_comment_from_seconds_filename_still_uses_minute_note_format(self):
         comment = self.processor._build_time_range_comment("2026-03-06_09-00-05", 61.2)
-        self.assertEqual(comment, "(20260306 09-00_09-02)")
+        self.assertEqual(comment, "(09-00_09-02)")
 
     def test_build_time_range_comment_uses_full_end_timestamp_when_crossing_day(self):
         comment = self.processor._build_time_range_comment("2026-03-06 23-58", 181)
-        self.assertEqual(comment, "(20260306 23-58_20260307 00-02)")
+        self.assertEqual(comment, "(23-58_20260307 00-02)")
 
     def test_build_merge_output_stem_compacts_and_deduplicates_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -51,7 +51,7 @@ class AudioProcessorNamingTests(unittest.TestCase):
             task = ProcessingTask(TaskType.ANNOTATE_TIME_RANGE, [audio_file], root)
             result = self.processor._annotate_time_range(task)
 
-            expected_name = "2026-03-06 09-00(note)(20260306 09-00_09-02).mp3"
+            expected_name = "2026-03-06 09-00(note)(09-00_09-02).mp3"
             self.assertTrue(result.success)
             self.assertEqual(result.processed_count, 1)
             self.assertEqual(result.output_files[0].name, expected_name)
@@ -76,8 +76,8 @@ class AudioProcessorNamingTests(unittest.TestCase):
 
             expected_name = (
                 "2026-03-06 09-00"
-                "(20260306 09-00_09-02)"
-                "(20260306 09-00_09-02).mp3"
+                "(09-00_09-02)"
+                "(09-00_09-02).mp3"
             )
             self.assertTrue(second_result.success)
             self.assertEqual(second_result.output_files[0].name, expected_name)
@@ -96,11 +96,26 @@ class AudioProcessorNamingTests(unittest.TestCase):
             task = ProcessingTask(TaskType.ANNOTATE_TIME_RANGE, [video_file], root)
             result = self.processor._annotate_time_range(task)
 
-            expected_name = "2026-03-06 09-00(20260306 09-00_09-02).mp4"
+            expected_name = "2026-03-06 09-00(09-00_09-02).mp4"
             self.assertTrue(result.success)
             self.assertEqual(result.processed_count, 1)
             self.assertEqual(result.output_files[0].name, expected_name)
             self.assertTrue((root / expected_name).exists())
+
+    def test_build_merge_output_stem_preserves_short_time_range_notes(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            first_path = root / "2026-03-06 09-00(09-00_09-02).mp3"
+            second_path = root / "2026-03-06 09-05(Q&A)(09-05_09-07).mp3"
+            first_path.write_bytes(b"one")
+            second_path.write_bytes(b"two")
+
+            first = AudioFile.from_path(first_path, datetime(2026, 3, 6, 9, 0))
+            second = AudioFile.from_path(second_path, datetime(2026, 3, 6, 9, 5))
+
+            stem = self.processor._build_merge_output_stem([first, second])
+
+        self.assertEqual(stem, "20260306 09-00(09-00_09-02)(Q&A)(09-05_09-07)")
 
     def test_merged_output_detection_accepts_spaced_and_unspaced_comments(self):
         with tempfile.TemporaryDirectory() as tmp:
