@@ -37,7 +37,7 @@
         </div>
 
         <div class="panelBody">
-          <div class="group">
+          <div class="group operationsGroup">
             <div class="groupTitle">Operations</div>
             <button class="btn action import" id="importBtn">Import OBS</button>
             <button class="btn action convert" id="convertBtn">Convert to MP3</button>
@@ -47,7 +47,7 @@
             <button class="btn action organize" id="organizeBtn">Organize</button>
           </div>
 
-          <div class="group">
+          <div class="group selectionGroup">
             <div class="groupTitle">Selection</div>
             <div class="row">
               <button class="btn secondary" id="selectAllBtn">Select All</button>
@@ -56,7 +56,7 @@
             <div class="hint" id="selectionHint">0 selected</div>
           </div>
 
-          <div class="group">
+          <div class="group settingsGroup">
             <div class="groupTitle">Settings</div>
             <label class="field">
               <div class="label">Timezone</div>
@@ -75,7 +75,7 @@
             <div class="hint settingsStatus" id="settingsStatus" aria-live="polite">Settings not saved yet.</div>
           </div>
 
-          <div class="group">
+          <div class="group progressGroup">
             <div class="groupTitle">Progress</div>
             <div class="log" id="logBox"></div>
           </div>
@@ -97,6 +97,8 @@
         </div>
       </form>
     </dialog>
+
+    <div class="toastRegion" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
 
     <script src="/app.js"></script>
   </body>
