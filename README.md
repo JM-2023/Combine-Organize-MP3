@@ -12,14 +12,18 @@ Professional audio file management with Claude-themed modern UI.
 - **Silence Removal** - Clean up recordings automatically
 - **Organize** - Group files by date with timezone support
 - **Safe Outputs** - Never overwrite existing files; auto-append numeric suffixes
-- **Modern UI** - Claude's signature orange theme with dark mode
+- **Floating Command Deck** - New default Web UI with compact floating controls
+- **Classic Web UI** - Previous full-page Web UI kept at `/classic/`
 
 ## Quick Start
 
 ### macOS
 ```bash
-# Web UI (recommended): double-click run.command or:
+# New Web UI (recommended): double-click run.command or:
 ./run.command
+
+# Classic Web UI:
+./run_classic.command
 ```
 
 Desktop UI (optional):
@@ -36,6 +40,8 @@ python3 web_server.py
 ## UI Tips
 
 - Web UI runs locally on `127.0.0.1` and opens in your browser.
+- The new floating-panel UI is the default route. The previous UI remains available at `/classic/`.
+- `run.command` opens the new UI directly, while `run_classic.command` opens the preserved classic UI directly.
 - Desktop UI remembers window/split sizes; if it ever opens too small/off-screen, use `View → Reset Window Layout`.
 
 ## Behavior & Naming
@@ -98,7 +104,8 @@ UI (Presentation Only)
 
 Web UI (Presentation Only)
 ├── web_server.py        # Local web server + JSON API
-└── webui/               # Static HTML/CSS/JS
+├── webui/               # New floating command deck
+└── webui_classic/       # Preserved previous Web UI
 
 Entry
 └── main.py             # Application entry point

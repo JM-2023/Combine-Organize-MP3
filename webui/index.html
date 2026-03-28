@@ -1,105 +1,215 @@
 <!doctype html>
-<html lang="en">
+<html lang="zh-CN">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Audio Toolbox Pro</title>
-    <link rel="stylesheet" href="/styles.css" />
+    <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
-    <header class="topbar">
-      <div class="brand">
-        <div class="title">Audio Toolbox Pro</div>
-        <div class="subtitle">Local Web UI (127.0.0.1 only)</div>
-      </div>
-      <div class="status">
-        <div class="cwd" id="cwd"></div>
-        <div class="pill" id="busyPill">Idle</div>
-      </div>
-    </header>
-
-    <main class="layout">
-      <section class="panel files">
-        <div class="panelHeader">
-          <div class="panelTitle">Files by Date</div>
-          <div class="panelActions">
-            <button class="btn secondary" id="refreshBtn">Refresh</button>
+    <div class="appShell">
+      <main class="workspace">
+        <section class="heroBand">
+          <div class="heroCopy">
+            <div class="heroEyebrow">Local Session Deck</div>
+            <h1>Audio Toolbox Pro</h1>
+            <p>本地音频整理、合并、注释与归档。新版界面默认启用，旧版仍保留。</p>
           </div>
-        </div>
-        <div class="panelBody">
-          <div class="filesRoot" id="filesRoot"></div>
-        </div>
-      </section>
-
-      <aside class="panel controls">
-        <div class="panelHeader">
-          <div class="panelTitle">Controls</div>
-        </div>
-
-        <div class="panelBody">
-          <div class="group operationsGroup">
-            <div class="groupTitle">Operations</div>
-            <button class="btn action import" id="importBtn">Import OBS</button>
-            <button class="btn action convert" id="convertBtn">Convert to MP3</button>
-            <button class="btn action merge" id="mergeBtn">Merge Selected</button>
-            <button class="btn action annotate" id="annotateBtn">Add Time Notes</button>
-            <button class="btn action silence" id="silenceBtn">Remove Silence</button>
-            <button class="btn action organize" id="organizeBtn">Organize</button>
-          </div>
-
-          <div class="group selectionGroup">
-            <div class="groupTitle">Selection</div>
-            <div class="row">
-              <button class="btn secondary" id="selectAllBtn">Select All</button>
-              <button class="btn secondary" id="deselectAllBtn">Deselect All</button>
+          <div class="heroLedger">
+            <div class="ledgerCard">
+              <div class="ledgerLabel">Workspace</div>
+              <div class="ledgerValue" id="cwdCard" title=""></div>
             </div>
-            <div class="hint" id="selectionHint">0 selected</div>
+            <div class="ledgerCard">
+              <div class="ledgerLabel">Selection</div>
+              <div class="ledgerValue"><span id="selectionCountCard">0</span> files</div>
+            </div>
+            <div class="ledgerCard">
+              <div class="ledgerLabel">Library</div>
+              <div class="ledgerValue" id="libraryCountCard">0 groups / 0 files</div>
+            </div>
+            <div class="ledgerCard">
+              <div class="ledgerLabel">Route</div>
+              <div class="ledgerValue"><a href="/classic/">Open classic UI</a></div>
+            </div>
+          </div>
+        </section>
+
+        <section class="libraryShell">
+          <div class="libraryTopbar">
+            <div class="librarySummary">
+              <div class="summaryTitle">日期时间线</div>
+              <div class="summaryMeta" id="timelineSummary">0 个分组，0 个文件</div>
+            </div>
+            <div class="libraryActions">
+              <button class="btn btn-ghost" id="refreshBtn" type="button">刷新库</button>
+              <button class="btn btn-ghost" id="selectAllBtn" type="button">全选</button>
+              <button class="btn btn-ghost" id="deselectAllBtn" type="button">清空</button>
+            </div>
           </div>
 
-          <div class="group settingsGroup">
-            <div class="groupTitle">Settings</div>
-            <label class="field">
-              <div class="label">Timezone</div>
-              <select id="timezoneSelect"></select>
-            </label>
-            <label class="field">
-              <div class="label">Threads</div>
-              <input id="threadsInput" type="number" min="1" max="16" step="1" />
-            </label>
-            <label class="field">
-              <div class="label">Cutoff Hour</div>
-              <input id="cutoffHourInput" type="number" min="0" max="23" step="1" />
-            </label>
-            <div class="hint">Files before cutoff belong to previous day.</div>
-            <button class="btn secondary" id="saveSettingsBtn">Save Settings</button>
-            <div class="hint settingsStatus" id="settingsStatus" aria-live="polite">Settings not saved yet.</div>
-          </div>
+          <div class="workspaceNotice" id="workspaceNotice" hidden></div>
+          <div class="filesRoot" id="filesRoot"></div>
+        </section>
+      </main>
 
-          <div class="group progressGroup">
-            <div class="groupTitle">Progress</div>
-            <div class="log" id="logBox"></div>
+      <aside class="commandPanel" id="commandPanel" data-collapsed="false">
+        <button class="panelHeader" id="panelToggle" type="button" aria-expanded="true">
+          <div class="headerState">
+            <span class="stateDot ready" id="stateDot" aria-hidden="true"></span>
+            <span class="headerLabel">Command Deck</span>
           </div>
+          <div class="headerText">
+            <div class="headerTitle">Audio Toolbox</div>
+            <div class="headerSummary" id="headerSummary">Idle | 0 selected | 0 files</div>
+          </div>
+          <div class="headerFold" id="headerFold">收起</div>
+        </button>
+
+        <div class="panelProgress" id="panelProgress">
+          <div class="panelProgressBar" id="panelProgressBar"></div>
+        </div>
+
+        <div class="panelBody" id="panelBody">
+          <nav class="tabBar" aria-label="Command panel tabs">
+            <button class="tab is-active" type="button" data-tab="run">
+              <span class="tabIcon">▶</span>
+              <span class="tabLabel">Run</span>
+            </button>
+            <button class="tab" type="button" data-tab="load">
+              <span class="tabIcon">↓</span>
+              <span class="tabLabel">Load</span>
+            </button>
+            <button class="tab" type="button" data-tab="status">
+              <span class="tabIcon">◎</span>
+              <span class="tabLabel">Status</span>
+            </button>
+          </nav>
+
+          <div class="feedbackStrip" id="feedbackStrip" hidden></div>
+
+          <section class="pane is-active" data-pane="run">
+            <div class="card">
+              <div class="cardLabel">Selection</div>
+              <div class="selectionHeadline" id="selectionHeadline">0 files selected</div>
+              <div class="miniStats">
+                <div class="miniStat">
+                  <span class="miniStatLabel">Audio</span>
+                  <span class="miniStatValue" id="selectedAudioCount">0</span>
+                </div>
+                <div class="miniStat">
+                  <span class="miniStatLabel">Video</span>
+                  <span class="miniStatValue" id="selectedVideoCount">0</span>
+                </div>
+                <div class="miniStat">
+                  <span class="miniStatLabel">Ready</span>
+                  <span class="miniStatValue" id="selectedReadyCount">0</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="card">
+              <div class="cardLabel">Primary Actions</div>
+              <div class="buttonStack">
+                <button class="btn btn-primary" id="mergeBtn" type="button">Merge Selected</button>
+                <div class="buttonRow two">
+                  <button class="btn btn-ghost" id="convertBtn" type="button">Convert to MP3</button>
+                  <button class="btn btn-ghost" id="annotateBtn" type="button">Add Time Notes</button>
+                </div>
+                <div class="buttonRow two">
+                  <button class="btn btn-ghost" id="silenceBtn" type="button">Remove Silence</button>
+                  <button class="btn btn-ghost" id="runRefreshBtn" type="button">Refresh View</button>
+                </div>
+              </div>
+            </div>
+
+            <div class="card lowCard">
+              <div class="cardLabel">Quick Rules</div>
+              <ul class="microList">
+                <li>只有可选文件会被处理。</li>
+                <li>转换只对视频启用，合并与静音处理只对音频启用。</li>
+                <li>时间注释可用于当前选中的可处理媒体文件。</li>
+              </ul>
+            </div>
+          </section>
+
+          <section class="pane" data-pane="load">
+            <div class="card">
+              <div class="cardLabel">Import OBS</div>
+              <label class="field">
+                <span class="fieldLabel">Source directory</span>
+                <input id="importPathInput" type="text" placeholder="/Users/you/Movies" />
+              </label>
+              <div class="buttonRow two">
+                <button class="btn btn-ghost" id="detectObsBtn" type="button">Use detected path</button>
+                <button class="btn btn-primary" id="importBtn" type="button">Import OBS</button>
+              </div>
+              <div class="fieldHint" id="importPathHint">导入会把源目录中的 `.mp4` 移入当前工作目录。</div>
+            </div>
+
+            <div class="card">
+              <div class="cardLabel">Live Task</div>
+              <div class="taskHeadline">
+                <div class="taskTitle" id="taskHeadline">Idle</div>
+                <div class="taskMeta" id="taskMeta">No running task</div>
+              </div>
+              <div class="taskSubline" id="taskSubline">等待操作。</div>
+              <pre class="logBox" id="logBox"></pre>
+            </div>
+          </section>
+
+          <section class="pane" data-pane="status">
+            <div class="card">
+              <div class="cardLabel">Settings</div>
+              <label class="field">
+                <span class="fieldLabel">Timezone</span>
+                <select id="timezoneSelect"></select>
+              </label>
+              <div class="buttonRow two">
+                <label class="field compactField">
+                  <span class="fieldLabel">Threads</span>
+                  <input id="threadsInput" type="number" min="1" max="16" step="1" />
+                </label>
+                <label class="field compactField">
+                  <span class="fieldLabel">Cutoff</span>
+                  <input id="cutoffHourInput" type="number" min="0" max="23" step="1" />
+                </label>
+              </div>
+              <button class="btn btn-ghost" id="saveSettingsBtn" type="button">Apply Settings</button>
+              <div class="fieldHint" id="settingsStatus">Settings loaded.</div>
+            </div>
+
+            <div class="card">
+              <div class="cardLabel">Telemetry</div>
+              <div class="statusGrid">
+                <div class="statusKey">Current task</div>
+                <div class="statusValue" id="statusCurrentTask">Idle</div>
+                <div class="statusKey">Selection</div>
+                <div class="statusValue" id="statusSelection">0 files</div>
+                <div class="statusKey">Library</div>
+                <div class="statusValue" id="statusLibrary">0 groups</div>
+                <div class="statusKey">Last sync</div>
+                <div class="statusValue" id="statusLastSync">Just now</div>
+              </div>
+            </div>
+
+            <div class="card dangerCard">
+              <div class="cardLabel">Organize</div>
+              <div class="fieldHint">按日期整理全部文件，并为每个目录创建压缩包。</div>
+              <button class="btn btn-danger" id="organizeArmBtn" type="button">Organize Library</button>
+              <div class="confirmBlock" id="organizeConfirmBlock" hidden>
+                <div class="confirmText">确认开始整理当前工作目录中的全部文件？</div>
+                <div class="buttonRow two">
+                  <button class="btn btn-danger" id="organizeConfirmBtn" type="button">Confirm Organize</button>
+                  <button class="btn btn-ghost" id="organizeCancelBtn" type="button">Cancel</button>
+                </div>
+              </div>
+            </div>
+          </section>
         </div>
       </aside>
-    </main>
+    </div>
 
-    <dialog id="importDialog" class="dialog">
-      <form method="dialog" class="dialogForm">
-        <div class="dialogTitle">Import OBS Recordings</div>
-        <div class="dialogText">Paste an OBS recordings directory path. The server will move .mp4 files into the current folder.</div>
-        <label class="field">
-          <div class="label">Source directory</div>
-          <input id="importPathInput" type="text" placeholder="/Users/you/Movies" />
-        </label>
-        <div class="dialogActions">
-          <button class="btn secondary" value="cancel">Cancel</button>
-          <button class="btn action import" id="importConfirmBtn" value="ok">Import</button>
-        </div>
-      </form>
-    </dialog>
-
-    <div class="toastRegion" id="toastRegion" aria-live="polite" aria-atomic="false"></div>
-
-    <script src="/app.js"></script>
+    <script src="./app.js"></script>
   </body>
 </html>

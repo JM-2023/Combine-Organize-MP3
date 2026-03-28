@@ -8,102 +8,80 @@ const TIMEZONES = [
   "Australia/Sydney",
 ];
 
-const UI_SCALE_MIN = 0.72;
-const UI_SCALE_MAX = 1.0;
-const TOAST_LIMIT = 4;
-const TOAST_DEFAULT_MS = 3200;
-const TOAST_ERROR_MS = 4600;
-const HIGHLIGHT_MS = 2400;
-const SELECTION_HINT_MS = 260;
-const PANEL_STAGGER_MS = 90;
-const GROUP_STAGGER_MS = 44;
-const MAX_BOOT_GROUPS = 6;
-const MAX_SELECTION_PULSES = 12;
+const PANEL_STORAGE_KEY = "audio-toolbox-panel-collapsed";
+const TAB_STORAGE_KEY = "audio-toolbox-panel-tab";
+const FEEDBACK_MS = 3600;
+const BUTTON_FLASH_MS = 1400;
+const HIGHLIGHT_MS = 2200;
 
 const TASK_COPY = {
   IMPORT: {
     pillLabel: "Import",
-    start() {
-      return "Starting import...";
-    },
-    success(result) {
+    runningLabel: "Importing…",
+    start: () => "开始导入 OBS 录屏。",
+    success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `Import complete: ${countLabel(count, "file")} moved.` : "Import complete.";
+      return count > 0 ? `导入完成，已移动 ${count} 个文件。` : "导入完成。";
     },
-    failure: "Import failed",
+    failure: "导入失败",
   },
   CONVERT: {
     pillLabel: "Convert",
-    start(meta) {
-      return meta.count ? `Starting conversion for ${countLabel(meta.count, "file")}...` : "Starting conversion...";
-    },
-    success(result) {
+    runningLabel: "Converting…",
+    start: (meta) => `开始转换 ${meta.count || 0} 个视频为 MP3。`,
+    success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `Converted ${countLabel(count, "video file")}.` : "Conversion complete.";
+      return count > 0 ? `转换完成，共处理 ${count} 个视频。` : "转换完成。";
     },
-    failure: "Conversion failed",
+    failure: "转换失败",
   },
   MERGE: {
     pillLabel: "Merge",
-    start(meta) {
-      return meta.count ? `Starting merge for ${countLabel(meta.count, "file")}...` : "Starting merge...";
-    },
-    success() {
-      return "Merge complete.";
-    },
-    failure: "Merge failed",
+    runningLabel: "Merging…",
+    start: (meta) => `开始合并 ${meta.count || 0} 个音频文件。`,
+    success: () => "合并完成。",
+    failure: "合并失败",
   },
   MERGE_BY_DATE: {
-    pillLabel: "Merge",
-    start(meta) {
-      return meta.dateKey ? `Starting merge for ${meta.dateKey}...` : "Starting merge...";
-    },
-    success() {
-      return "Merge complete.";
-    },
-    failure: "Merge failed",
+    pillLabel: "Merge Day",
+    runningLabel: "Merging…",
+    start: (meta) => `开始合并 ${meta.dateKey || "该日期"} 的文件。`,
+    success: () => "按日期合并完成。",
+    failure: "按日期合并失败",
   },
   ANNOTATE_TIME_RANGE: {
     pillLabel: "Notes",
-    start(meta) {
-      return meta.count ? `Adding time notes to ${countLabel(meta.count, "file")}...` : "Adding time notes...";
-    },
-    success(result) {
+    runningLabel: "Annotating…",
+    start: (meta) => `开始为 ${meta.count || 0} 个文件写入时间注释。`,
+    success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `Added time notes to ${countLabel(count, "file")}.` : "Time notes added.";
+      return count > 0 ? `时间注释已写入 ${count} 个文件。` : "时间注释完成。";
     },
-    failure: "Time notes failed",
+    failure: "时间注释失败",
   },
   REMOVE_SILENCE: {
     pillLabel: "Silence",
-    start(meta) {
-      return meta.count ? `Starting silence removal for ${countLabel(meta.count, "file")}...` : "Starting silence removal...";
-    },
-    success(result) {
+    runningLabel: "Cleaning…",
+    start: (meta) => `开始处理 ${meta.count || 0} 个音频的静音段。`,
+    success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `Silence removal complete for ${countLabel(count, "file")}.` : "Silence removal complete.";
+      return count > 0 ? `静音处理完成，共 ${count} 个文件。` : "静音处理完成。";
     },
-    failure: "Silence removal failed",
+    failure: "静音处理失败",
   },
   ORGANIZE: {
     pillLabel: "Organize",
-    start() {
-      return "Starting organize...";
-    },
-    success() {
-      return "Organize complete.";
-    },
-    failure: "Organize failed",
+    runningLabel: "Organizing…",
+    start: () => "开始按日期整理当前工作目录。",
+    success: () => "整理完成。",
+    failure: "整理失败",
   },
   DEFAULT: {
     pillLabel: "Task",
-    start() {
-      return "Starting task...";
-    },
-    success() {
-      return "Task complete.";
-    },
-    failure: "Task failed",
+    runningLabel: "Working…",
+    start: () => "任务启动中。",
+    success: () => "任务完成。",
+    failure: "任务失败",
   },
 };
 
@@ -114,88 +92,69 @@ const state = {
   groups: [],
   fileSnapshot: new Map(),
   selected: new Set(),
-  lastSelectionCount: 0,
-  settingsSaveInFlight: false,
   currentTaskId: null,
   lastHandledFinishedTaskId: null,
   activeTask: null,
   observedTaskRunning: false,
+  settingsSaveInFlight: false,
+  pollTimer: null,
+  feedbackTimer: null,
+  workspaceNoticeTimer: null,
+  buttonTimers: new Map(),
+  highlightTimer: null,
   highlightedPaths: new Set(),
   highlightedGroups: new Set(),
-  highlightTimer: null,
-  selectionHintTimer: null,
-  toastCounter: 0,
-  bootAnimationPlayed: false,
-  pollTimer: null,
-  fitUiRaf: null,
+  lastSyncAt: null,
 };
 
-function qs(id) { return document.getElementById(id); }
+function qs(id) {
+  return document.getElementById(id);
+}
+
+function readStorage(key, fallback) {
+  try {
+    const value = localStorage.getItem(key);
+    return value === null ? fallback : value;
+  } catch {
+    return fallback;
+  }
+}
+
+function writeStorage(key, value) {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    return;
+  }
+}
+
+function escapeHtml(value) {
+  return String(value)
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&#039;");
+}
 
 function countLabel(count, noun) {
   return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
-function motionAllowed() {
-  return !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-function animateElement(el, keyframes, options) {
-  if (!el || !motionAllowed() || typeof el.animate !== "function") return null;
-  return el.animate(keyframes, options);
-}
-
-function captureToastPositions(region) {
-  const positions = new Map();
-  if (!region) return positions;
-
-  for (const toast of region.children) {
-    if (!toast.dataset.toastId) continue;
-    positions.set(toast.dataset.toastId, toast.getBoundingClientRect());
-  }
-  return positions;
-}
-
-function animateToastLayout(previousPositions) {
-  if (!motionAllowed()) return;
-  const region = qs("toastRegion");
-  if (!region) return;
-
-  for (const toast of region.children) {
-    const previous = previousPositions.get(toast.dataset.toastId);
-    if (!previous) continue;
-    const next = toast.getBoundingClientRect();
-    const deltaY = previous.top - next.top;
-    if (Math.abs(deltaY) < 1) continue;
-    toast.animate(
-      [
-        { transform: `translateY(${deltaY}px)` },
-        { transform: "translateY(0)" },
-      ],
-      {
-        duration: 220,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      }
-    );
-  }
+function formatRelativeTime(ts) {
+  if (!ts) return "Just now";
+  const delta = Math.max(0, Date.now() - ts);
+  if (delta < 1000) return "Just now";
+  const seconds = Math.floor(delta / 1000);
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  return `${hours}h ago`;
 }
 
 function getTaskCopy(type) {
   return TASK_COPY[type] || TASK_COPY.DEFAULT;
-}
-
-function createTaskMeta(payload) {
-  const params = payload && typeof payload.params === "object" ? payload.params : {};
-  const paths = Array.isArray(payload && payload.paths) ? payload.paths : [];
-  const type = String((payload && payload.type) || "").toUpperCase() || "DEFAULT";
-  const copy = getTaskCopy(type);
-  return {
-    type,
-    count: paths.length,
-    dateKey: typeof params.date_key === "string" ? params.date_key : "",
-    pillLabel: copy.pillLabel,
-    triggerSelector: "",
-  };
 }
 
 function buildTriggerSelector(sourceEl, taskMeta) {
@@ -206,34 +165,40 @@ function buildTriggerSelector(sourceEl, taskMeta) {
   return "";
 }
 
+function createTaskMeta(payload, sourceEl) {
+  const params = payload && typeof payload.params === "object" ? payload.params : {};
+  const paths = Array.isArray(payload && payload.paths) ? payload.paths : [];
+  const type = String((payload && payload.type) || "").toUpperCase() || "DEFAULT";
+  const copy = getTaskCopy(type);
+  return {
+    type,
+    count: paths.length,
+    dateKey: typeof params.date_key === "string" ? params.date_key : "",
+    triggerSelector: buildTriggerSelector(sourceEl, { type, dateKey: typeof params.date_key === "string" ? params.date_key : "" }),
+    pillLabel: copy.pillLabel,
+    runningLabel: copy.runningLabel,
+  };
+}
+
 function formatTaskStart(meta) {
-  const copy = getTaskCopy(meta && meta.type);
-  return copy.start(meta || {});
+  return getTaskCopy(meta && meta.type).start(meta || {});
 }
 
 function formatTaskSuccess(meta, result) {
-  const copy = getTaskCopy(meta && meta.type);
-  return copy.success(result || {});
+  return getTaskCopy(meta && meta.type).success(result || {});
 }
 
 function formatTaskError(meta, result) {
   const copy = getTaskCopy(meta && meta.type);
   const detail = result && result.error ? String(result.error).trim() : "";
-  return detail ? `${copy.failure}: ${detail}` : `${copy.failure}.`;
+  return detail ? `${copy.failure}: ${detail}` : `${copy.failure}。`;
 }
 
 function buildFileSnapshot(groups) {
   const snapshot = new Map();
   for (const group of groups || []) {
     for (const file of group.files || []) {
-      snapshot.set(file.path, {
-        dateKey: group.date_key,
-        state: String(file.state || ""),
-        style: String(file.style || ""),
-        display: String(file.display || ""),
-        time: String(file.time || ""),
-        size: String(file.size || ""),
-      });
+      snapshot.set(file.path, { ...file, dateKey: group.date_key });
     }
   }
   return snapshot;
@@ -245,868 +210,760 @@ function diffSnapshots(previousSnapshot, nextSnapshot, taskMeta) {
 
   for (const [path, nextFile] of nextSnapshot.entries()) {
     const previousFile = previousSnapshot.get(path);
-    const hasChanged = !previousFile
-      || previousFile.state !== nextFile.state
-      || previousFile.style !== nextFile.style
-      || previousFile.display !== nextFile.display
-      || previousFile.time !== nextFile.time
-      || previousFile.size !== nextFile.size;
-
-    if (!hasChanged) continue;
-    paths.add(path);
-    if (nextFile.dateKey) groups.add(nextFile.dateKey);
+    if (!previousFile) {
+      paths.add(path);
+      if (nextFile.dateKey) groups.add(nextFile.dateKey);
+      continue;
+    }
+    if (
+      previousFile.display !== nextFile.display ||
+      previousFile.state !== nextFile.state ||
+      previousFile.style !== nextFile.style ||
+      previousFile.size !== nextFile.size ||
+      previousFile.time !== nextFile.time
+    ) {
+      paths.add(path);
+      if (nextFile.dateKey) groups.add(nextFile.dateKey);
+    }
   }
 
-  if (taskMeta && taskMeta.type === "MERGE_BY_DATE" && taskMeta.dateKey) {
+  if (taskMeta && taskMeta.dateKey) {
     groups.add(taskMeta.dateKey);
   }
 
   return { paths, groups };
 }
 
-function dismissToast(toast) {
-  if (!toast || toast.dataset.leaving === "true") return;
-  toast.dataset.leaving = "true";
-  toast.classList.add("is-leaving");
-  const region = qs("toastRegion");
-  const previousPositions = captureToastPositions(region);
-  window.setTimeout(() => {
-    toast.remove();
-    animateToastLayout(previousPositions);
-  }, 200);
-}
-
-function showToast({ tone = "info", title = "", message = "", duration } = {}) {
-  const region = qs("toastRegion");
-  if (!region || !message) return;
-  const previousPositions = captureToastPositions(region);
-
-  while (region.children.length >= TOAST_LIMIT) {
-    const oldest = region.firstElementChild;
-    if (!oldest) break;
-    oldest.remove();
-  }
-
-  const toast = document.createElement("div");
-  toast.className = `toast toast-${tone}`;
-  toast.dataset.toastId = String(++state.toastCounter);
-  toast.setAttribute("role", tone === "error" ? "alert" : "status");
-
-  if (title) {
-    const titleEl = document.createElement("div");
-    titleEl.className = "toastTitle";
-    titleEl.textContent = title;
-    toast.appendChild(titleEl);
-  }
-
-  const messageEl = document.createElement("div");
-  messageEl.className = "toastMessage";
-  messageEl.textContent = message;
-  toast.appendChild(messageEl);
-  region.appendChild(toast);
-  animateToastLayout(previousPositions);
-
-  const timeoutMs = Number.isFinite(duration) ? duration : (tone === "error" ? TOAST_ERROR_MS : TOAST_DEFAULT_MS);
-  window.setTimeout(() => dismissToast(toast), timeoutMs);
-}
-
-function syncTransientHighlights() {
-  const root = qs("filesRoot");
-  if (!root) return;
-
-  for (const row of root.querySelectorAll("[data-row-path]")) {
-    const path = row.getAttribute("data-row-path");
-    row.classList.toggle("fresh", !!path && state.highlightedPaths.has(path));
-  }
-
-  for (const group of root.querySelectorAll("[data-date-key]")) {
-    const dateKey = group.getAttribute("data-date-key");
-    group.classList.toggle("group-fresh", !!dateKey && state.highlightedGroups.has(dateKey));
-  }
-}
-
-function clearTransientHighlights() {
+function clearHighlights() {
   if (state.highlightTimer) {
     clearTimeout(state.highlightTimer);
     state.highlightTimer = null;
   }
   state.highlightedPaths.clear();
   state.highlightedGroups.clear();
-  syncTransientHighlights();
 }
 
-function animateHighlightTargets(paths, groups) {
-  if (!motionAllowed()) return;
-
-  const root = qs("filesRoot");
-  if (!root) return;
-
-  let groupIndex = 0;
-  for (const dateKey of groups || []) {
-    const group = root.querySelector(`[data-date-key="${CSS.escape(dateKey)}"]`);
-    if (!group) continue;
-    animateElement(
-      group,
-      [
-        { transform: "translateY(6px)", opacity: 0.98 },
-        { transform: "translateY(0)", opacity: 1 },
-      ],
-      {
-        duration: 280,
-        delay: Math.min(groupIndex * 28, 120),
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      }
-    );
-    groupIndex += 1;
-  }
-
-  let rowIndex = 0;
-  for (const path of paths || []) {
-    const row = root.querySelector(`[data-row-path="${CSS.escape(path)}"]`);
-    if (!row) continue;
-    animateElement(
-      row,
-      [
-        { transform: "translateX(6px)", opacity: 0.92 },
-        { transform: "translateX(0)", opacity: 1 },
-      ],
-      {
-        duration: 260,
-        delay: Math.min(rowIndex * 24, 180),
-        easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-      }
-    );
-    rowIndex += 1;
-  }
-}
-
-function setTransientHighlights(paths, groups) {
-  if (state.highlightTimer) {
-    clearTimeout(state.highlightTimer);
-    state.highlightTimer = null;
-  }
-
+function setHighlights(paths, groups) {
+  clearHighlights();
   state.highlightedPaths = new Set(paths || []);
   state.highlightedGroups = new Set(groups || []);
-  syncTransientHighlights();
-  animateHighlightTargets(state.highlightedPaths, state.highlightedGroups);
-
   if (!state.highlightedPaths.size && !state.highlightedGroups.size) return;
   state.highlightTimer = window.setTimeout(() => {
-    state.highlightTimer = null;
-    state.highlightedPaths.clear();
-    state.highlightedGroups.clear();
-    syncTransientHighlights();
+    clearHighlights();
+    renderFiles();
   }, HIGHLIGHT_MS);
 }
 
-function syncSelectionState() {
-  const root = qs("filesRoot");
-  if (!root) return;
-
-  for (const row of root.querySelectorAll("[data-row-path]")) {
-    const path = row.getAttribute("data-row-path");
-    const selected = !!path && state.selected.has(path);
-    row.classList.toggle("selected", selected);
-    row.setAttribute("aria-selected", selected ? "true" : "false");
-  }
-}
-
-function animateSelectionChange(paths, checked) {
-  if (!motionAllowed()) return;
-
-  const limitedPaths = Array.from(paths || []).slice(0, MAX_SELECTION_PULSES);
-  for (const path of limitedPaths) {
-    const row = document.querySelector(`[data-row-path="${CSS.escape(path)}"]`);
-    if (!row) continue;
-    animateElement(
-      row,
-      checked
-        ? [
-            { transform: "scale(0.995)", boxShadow: "inset 0 0 0 1px rgba(220,136,98,0.1)" },
-            { transform: "scale(1)", boxShadow: "inset 0 0 0 1px rgba(220,136,98,0.32)" },
-          ]
-        : [
-            { transform: "scale(1)", opacity: 1 },
-            { transform: "scale(0.998)", opacity: 0.92 },
-            { transform: "scale(1)", opacity: 1 },
-          ],
-      {
-        duration: checked ? 220 : 180,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-      }
-    );
-  }
-}
-
-function syncBusyDecorations() {
-  const logBox = qs("logBox");
-  if (logBox) logBox.classList.toggle("is-busy", state.busy);
-
-  for (const btn of document.querySelectorAll(".btn.is-origin")) {
-    btn.classList.remove("is-origin");
-  }
-  if (!state.busy || !state.activeTask || !state.activeTask.triggerSelector) return;
-  const origin = document.querySelector(state.activeTask.triggerSelector);
-  if (origin) origin.classList.add("is-origin");
-}
-
-function setBusy(busy) {
-  state.busy = !!busy;
-  document.body.dataset.busy = state.busy ? "true" : "false";
-  const pill = qs("busyPill");
-  if (state.busy) {
-    const label = state.activeTask && state.activeTask.pillLabel ? `Busy: ${state.activeTask.pillLabel}` : "Busy";
-    pill.textContent = label;
-    pill.title = state.activeTask ? formatTaskStart(state.activeTask) : "Task running";
-    pill.classList.add("busy");
-  } else {
-    pill.textContent = "Idle";
-    pill.removeAttribute("title");
-    pill.classList.remove("busy");
-  }
-
-  for (const id of ["importBtn","convertBtn","mergeBtn","annotateBtn","silenceBtn","organizeBtn","refreshBtn"]) {
-    const el = qs(id);
-    if (el) el.disabled = state.busy;
-  }
-  const saveBtn = qs("saveSettingsBtn");
-  if (saveBtn) saveBtn.disabled = state.busy || state.settingsSaveInFlight;
-  for (const id of ["timezoneSelect", "threadsInput", "cutoffHourInput"]) {
-    const el = qs(id);
-    if (el) el.disabled = state.busy || state.settingsSaveInFlight;
-  }
-  for (const btn of document.querySelectorAll("[data-merge-by-date]")) {
-    btn.disabled = state.busy;
-  }
-  syncBusyDecorations();
-}
-
-function updateSelectionHint() {
-  const hint = qs("selectionHint");
-  const nextCount = state.selected.size;
-  hint.textContent = `${nextCount} selected`;
-
-  if (nextCount !== state.lastSelectionCount) {
-    hint.classList.remove("is-updating");
-    void hint.offsetWidth;
-    hint.classList.add("is-updating");
-    if (state.selectionHintTimer) clearTimeout(state.selectionHintTimer);
-    state.selectionHintTimer = window.setTimeout(() => {
-      state.selectionHintTimer = null;
-      hint.classList.remove("is-updating");
-    }, SELECTION_HINT_MS);
-  }
-
-  state.lastSelectionCount = nextCount;
-  syncSelectionState();
-}
-
-function setSettingsStatus(statusClass, text) {
-  const el = qs("settingsStatus");
-  if (!el) return;
-  el.classList.remove("status-pending", "status-saving", "status-ok", "status-error");
-  if (statusClass) el.classList.add(`status-${statusClass}`);
-  el.textContent = text;
-  scheduleFitControlsUi();
-}
-
-function markSettingsDirty() {
-  if (state.busy || state.settingsSaveInFlight) return;
-  setSettingsStatus("pending", "Settings changed. Saving soon...");
-}
-
-function escapeHtml(s) {
-  return String(s)
-    .replaceAll("&","&amp;")
-    .replaceAll("<","&lt;")
-    .replaceAll(">","&gt;")
-    .replaceAll("\"","&quot;")
-    .replaceAll("'","&#039;");
-}
-
-function controlsFitInViewport() {
-  const body = document.querySelector(".controls > .panelBody");
-  if (!body) return true;
-  return body.scrollHeight <= body.clientHeight + 1;
-}
-
-function fitControlsUiScale() {
-  const root = document.documentElement;
-  if (window.matchMedia("(max-width: 980px)").matches) {
-    root.style.setProperty("--ui-scale", "1");
+function setFeedback(tone, message) {
+  const strip = qs("feedbackStrip");
+  if (!message) {
+    strip.hidden = true;
+    strip.textContent = "";
+    strip.removeAttribute("data-tone");
     return;
   }
 
-  root.style.setProperty("--ui-scale", String(UI_SCALE_MAX));
-  if (controlsFitInViewport()) return;
+  strip.hidden = false;
+  strip.dataset.tone = tone || "info";
+  strip.textContent = message;
 
-  root.style.setProperty("--ui-scale", String(UI_SCALE_MIN));
-  if (!controlsFitInViewport()) {
+  if (state.feedbackTimer) clearTimeout(state.feedbackTimer);
+  state.feedbackTimer = window.setTimeout(() => {
+    strip.hidden = true;
+    strip.textContent = "";
+    strip.removeAttribute("data-tone");
+    state.feedbackTimer = null;
+  }, FEEDBACK_MS);
+}
+
+function setWorkspaceNotice(tone, message, persist = false) {
+  const box = qs("workspaceNotice");
+  if (!message) {
+    box.hidden = true;
+    box.textContent = "";
+    box.removeAttribute("data-tone");
     return;
   }
 
-  let low = UI_SCALE_MIN;
-  let high = UI_SCALE_MAX;
-  let best = UI_SCALE_MIN;
+  box.hidden = false;
+  box.dataset.tone = tone || "info";
+  box.textContent = message;
 
-  for (let i = 0; i < 10; i += 1) {
-    const mid = (low + high) / 2;
-    root.style.setProperty("--ui-scale", mid.toFixed(4));
-    if (controlsFitInViewport()) {
-      best = mid;
-      low = mid;
-    } else {
-      high = mid;
-    }
+  if (state.workspaceNoticeTimer) clearTimeout(state.workspaceNoticeTimer);
+  if (!persist) {
+    state.workspaceNoticeTimer = window.setTimeout(() => {
+      box.hidden = true;
+      box.textContent = "";
+      box.removeAttribute("data-tone");
+      state.workspaceNoticeTimer = null;
+    }, FEEDBACK_MS);
   }
-
-  root.style.setProperty("--ui-scale", best.toFixed(3));
 }
 
-function scheduleFitControlsUi() {
-  if (state.fitUiRaf) cancelAnimationFrame(state.fitUiRaf);
-  state.fitUiRaf = requestAnimationFrame(() => {
-    state.fitUiRaf = null;
-    fitControlsUiScale();
-  });
+function flashButton(button, label, className = "is-success", duration = BUTTON_FLASH_MS) {
+  if (!button) return;
+  const timer = state.buttonTimers.get(button);
+  if (timer) clearTimeout(timer);
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent || "";
+  }
+  button.textContent = label;
+  button.classList.add(className);
+  const nextTimer = window.setTimeout(() => {
+    button.textContent = button.dataset.defaultLabel || button.textContent;
+    button.classList.remove(className);
+    state.buttonTimers.delete(button);
+  }, duration);
+  state.buttonTimers.set(button, nextTimer);
+}
+
+function setButtonWorking(button, isWorking, label) {
+  if (!button) return;
+  if (!button.dataset.defaultLabel) {
+    button.dataset.defaultLabel = button.textContent || "";
+  }
+  button.classList.toggle("is-working", !!isWorking);
+  button.textContent = isWorking ? label : (button.dataset.defaultLabel || button.textContent);
 }
 
 async function apiGet(path) {
-  const res = await fetch(path, { cache: "no-store" });
-  const data = await res.json();
-  if (!res.ok) {
-    const msg = data && (data.message || data.error) ? `${data.error || "Error"}: ${data.message || ""}` : "Request failed";
-    throw new Error(msg);
+  const response = await fetch(path, { cache: "no-store" });
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data && (data.message || data.error)
+      ? `${data.error || "Error"}: ${data.message || ""}`.trim()
+      : "Request failed";
+    throw new Error(message);
   }
   return data;
 }
 
 async function apiPost(path, payload) {
-  const res = await fetch(path, {
+  const response = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  const data = await res.json();
-  if (!res.ok) {
-    const msg = data && (data.message || data.error) ? `${data.error || "Error"}: ${data.message || ""}` : "Request failed";
-    throw new Error(msg);
+  const data = await response.json();
+  if (!response.ok) {
+    const message = data && (data.message || data.error)
+      ? `${data.error || "Error"}: ${data.message || ""}`.trim()
+      : "Request failed";
+    throw new Error(message);
   }
   return data;
 }
 
-function fileRowHtml(file) {
-  const disabled = !!file.disabled;
-  const styleClass = file.style ? String(file.style) : "normal";
-  const format = file.format ? String(file.format).toUpperCase() : "";
-  const selected = state.selected.has(file.path);
-  const fresh = state.highlightedPaths.has(file.path);
-  const mediaBadge = file.is_video && format
-    ? `<span class="mediaBadge mediaBadge-video">${escapeHtml(format)}</span>`
-    : "";
-
-  const checked = selected ? "checked" : "";
-  const cb = file.checkable
-    ? `<input type="checkbox" data-path="${escapeHtml(file.path)}" ${checked} ${disabled ? "disabled" : ""} />`
-    : `<span></span>`;
-
-  return `
-    <div class="fileRow ${disabled ? "disabled" : ""} ${selected ? "selected" : ""} ${fresh ? "fresh" : ""} style-${escapeHtml(styleClass)}" data-row-path="${escapeHtml(file.path)}" title="${escapeHtml(file.display || "")}">
-      ${cb}
-      <div class="fileName">
-        <span class="fileLabel">${escapeHtml(file.display || "")}</span>
-        ${mediaBadge}
-      </div>
-      <div class="fileMeta">${escapeHtml(file.time || "")}</div>
-      <div class="stateTag ${escapeHtml(styleClass)}" title="${escapeHtml(file.state || "")}">${escapeHtml(file.state || "")}</div>
-      <div class="fileMeta">${escapeHtml(file.size || "")}</div>
-    </div>
-  `;
+function selectedFiles() {
+  return Array.from(state.selected)
+    .map((path) => state.fileSnapshot.get(path))
+    .filter(Boolean);
 }
 
-function renderFiles() {
-  const root = qs("filesRoot");
-  root.innerHTML = "";
+function selectionSummary() {
+  const files = selectedFiles();
+  return {
+    total: files.length,
+    audio: files.filter((file) => file.is_audio).length,
+    video: files.filter((file) => file.is_video).length,
+    ready: files.filter((file) => file.checkable && !file.disabled).length,
+  };
+}
 
+function librarySummary() {
+  const groups = state.groups.length;
+  let files = 0;
   for (const group of state.groups) {
-    const swatch = group.color ? `<div class="swatch" style="background:${escapeHtml(group.color)}"></div>` : `<div class="swatch"></div>`;
-    const filesHtml = (group.files || []).map(fileRowHtml).join("");
-    const groupEl = document.createElement("div");
-    groupEl.className = `dateGroup ${state.highlightedGroups.has(group.date_key) ? "group-fresh" : ""}`;
-    groupEl.dataset.dateKey = group.date_key;
-    groupEl.innerHTML = `
-      <div class="dateHeader">
-        <div class="dateTitle">${swatch}<span>📅 ${escapeHtml(group.date_key)}</span></div>
-        <div class="dateActions">
-          <button class="btn secondary" data-merge-by-date="${escapeHtml(group.date_key)}">Merge by Date</button>
-        </div>
-      </div>
-      <div>${filesHtml}</div>
-    `;
-    root.appendChild(groupEl);
+    files += (group.files || []).length;
   }
-
-  syncSelectionState();
-  syncTransientHighlights();
-  setBusy(state.busy);
+  return { groups, files };
 }
 
-function playBootChoreography() {
-  if (state.bootAnimationPlayed) return;
-  state.bootAnimationPlayed = true;
-  if (!motionAllowed()) return;
+function updateTelemetry() {
+  const summary = selectionSummary();
+  const library = librarySummary();
+  const currentTask = state.activeTask ? (state.activeTask.pillLabel || state.activeTask.type) : "Idle";
 
-  animateElement(
-    document.querySelector(".topbar"),
-    [
-      { opacity: 0, transform: "translateY(-10px)" },
-      { opacity: 1, transform: "translateY(0)" },
-    ],
-    {
-      duration: 420,
-      easing: "cubic-bezier(0.16, 1, 0.3, 1)",
-    }
-  );
+  qs("selectionHeadline").textContent = `${summary.total} files selected`;
+  qs("selectedAudioCount").textContent = String(summary.audio);
+  qs("selectedVideoCount").textContent = String(summary.video);
+  qs("selectedReadyCount").textContent = String(summary.ready);
 
-  const panels = Array.from(document.querySelectorAll(".layout > .panel"));
-  panels.forEach((panel, index) => {
-    animateElement(
-      panel,
-      [
-        { opacity: 0, transform: "translateY(14px)" },
-        { opacity: 1, transform: "translateY(0)" },
-      ],
-      {
-        duration: 420,
-        delay: 80 + index * PANEL_STAGGER_MS,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "both",
-      }
-    );
-  });
+  qs("selectionCountCard").textContent = String(summary.total);
+  qs("libraryCountCard").textContent = `${library.groups} groups / ${library.files} files`;
+  qs("timelineSummary").textContent = `${library.groups} 个分组，${library.files} 个文件`;
 
-  const groups = Array.from(document.querySelectorAll(".dateGroup")).slice(0, MAX_BOOT_GROUPS);
-  groups.forEach((group, index) => {
-    animateElement(
-      group,
-      [
-        { opacity: 0, transform: "translateY(10px)" },
-        { opacity: 1, transform: "translateY(0)" },
-      ],
-      {
-        duration: 340,
-        delay: 140 + index * GROUP_STAGGER_MS,
-        easing: "cubic-bezier(0.22, 1, 0.36, 1)",
-        fill: "both",
-      }
-    );
-  });
+  qs("statusCurrentTask").textContent = currentTask;
+  qs("statusSelection").textContent = `${summary.total} files`;
+  qs("statusLibrary").textContent = `${library.groups} groups`;
+  qs("statusLastSync").textContent = formatRelativeTime(state.lastSyncAt);
+
+  const statusWord = state.busy
+    ? (state.activeTask && state.activeTask.pillLabel ? state.activeTask.pillLabel : "Busy")
+    : "Idle";
+  qs("headerSummary").textContent = `${statusWord} | ${summary.total} selected | ${library.files} files`;
 }
 
-function applySettingsToUI() {
-  const tzSel = qs("timezoneSelect");
-  const currentTz = state.settings.timezone || "Asia/Shanghai";
-  const zones = Array.from(new Set([...TIMEZONES, currentTz]));
-  tzSel.innerHTML = zones.map(tz => `<option value="${escapeHtml(tz)}">${escapeHtml(tz)}</option>`).join("");
-  tzSel.value = currentTz;
+function updateSettingsInputs() {
+  const tzSelect = qs("timezoneSelect");
+  const activeTimezone = state.settings.timezone || "Asia/Shanghai";
+  const zones = Array.from(new Set([...TIMEZONES, activeTimezone]));
+  tzSelect.innerHTML = zones.map((zone) => `<option value="${escapeHtml(zone)}">${escapeHtml(zone)}</option>`).join("");
+  tzSelect.value = activeTimezone;
   qs("threadsInput").value = String(state.settings.max_workers || 4);
   const cutoff = Number(state.settings.cutoff_hour);
   qs("cutoffHourInput").value = String(Number.isFinite(cutoff) ? Math.max(0, Math.min(23, cutoff)) : 4);
 }
 
+function updateStatusDecorations(taskState) {
+  const dot = qs("stateDot");
+  const panelProgress = qs("panelProgress");
+  const logBox = qs("logBox");
+  dot.classList.remove("busy", "error");
+  panelProgress.classList.toggle("is-busy", state.busy);
+  logBox.classList.toggle("is-busy", state.busy);
+
+  if (taskState === "error") {
+    dot.classList.add("error");
+    return;
+  }
+  if (state.busy) {
+    dot.classList.add("busy");
+  }
+}
+
+function updateActionAvailability() {
+  const summary = selectionSummary();
+  const library = librarySummary();
+  const importPath = qs("importPathInput").value.trim();
+
+  qs("mergeBtn").disabled = state.busy || summary.audio < 1;
+  qs("convertBtn").disabled = state.busy || summary.video < 1;
+  qs("annotateBtn").disabled = state.busy || summary.ready < 1;
+  qs("silenceBtn").disabled = state.busy || summary.audio < 1;
+  qs("refreshBtn").disabled = state.busy;
+  qs("runRefreshBtn").disabled = state.busy;
+  qs("importBtn").disabled = state.busy || !importPath;
+  qs("saveSettingsBtn").disabled = state.busy || state.settingsSaveInFlight;
+  qs("timezoneSelect").disabled = state.busy || state.settingsSaveInFlight;
+  qs("threadsInput").disabled = state.busy || state.settingsSaveInFlight;
+  qs("cutoffHourInput").disabled = state.busy || state.settingsSaveInFlight;
+  qs("organizeArmBtn").disabled = state.busy || library.files < 1;
+  qs("organizeConfirmBtn").disabled = state.busy || library.files < 1;
+
+  for (const button of document.querySelectorAll("[data-merge-by-date]")) {
+    button.disabled = state.busy || button.dataset.mergeEnabled !== "true";
+  }
+
+  const origin = state.activeTask ? document.querySelector(state.activeTask.triggerSelector) : null;
+  for (const button of document.querySelectorAll(".btn")) {
+    if (button === origin) continue;
+    if (button.classList.contains("is-working")) {
+      setButtonWorking(button, false);
+    }
+  }
+  if (origin && state.activeTask) {
+    setButtonWorking(origin, state.busy, state.activeTask.runningLabel);
+  }
+
+  updateTelemetry();
+}
+
+function fileRowHtml(file) {
+  const disabled = !!file.disabled;
+  const selected = state.selected.has(file.path);
+  const fresh = state.highlightedPaths.has(file.path);
+  const styleClass = file.style ? `style-${escapeHtml(file.style)}` : "";
+  const formatBadge = file.is_video && file.format
+    ? `<span class="mediaBadge">${escapeHtml(String(file.format).toUpperCase())}</span>`
+    : "";
+  const checkbox = file.checkable
+    ? `<label class="fileCheck"><input type="checkbox" data-path="${escapeHtml(file.path)}" ${selected ? "checked" : ""} ${disabled ? "disabled" : ""} /></label>`
+    : `<div class="fileCheck"></div>`;
+
+  return `
+    <div class="fileRow ${disabled ? "disabled" : ""} ${selected ? "selected" : ""} ${fresh ? "fresh" : ""} ${styleClass}" data-row-path="${escapeHtml(file.path)}" aria-selected="${selected ? "true" : "false"}">
+      ${checkbox}
+      <div class="fileMain" title="${escapeHtml(file.display || file.path)}">
+        <span class="fileName">${escapeHtml(file.display || file.path)}</span>
+        ${formatBadge}
+      </div>
+      <div class="fileMeta">${escapeHtml(file.time || "")}</div>
+      <div class="stateTag ${escapeHtml(file.style || "normal")}">${escapeHtml(file.state || "")}</div>
+      <div class="fileMeta">${escapeHtml(file.size || "")}</div>
+    </div>
+  `;
+}
+
+function groupMetaSummary(group) {
+  const files = group.files || [];
+  const audioCount = files.filter((file) => file.is_audio).length;
+  const videoCount = files.filter((file) => file.is_video).length;
+  const mergeable = files.some((file) => file.is_audio && file.checkable && !file.disabled);
+  return {
+    audioCount,
+    videoCount,
+    totalCount: files.length,
+    mergeable,
+  };
+}
+
+function renderFiles() {
+  const root = qs("filesRoot");
+  if (!state.groups.length) {
+    root.innerHTML = `<div class="emptyState">当前目录没有可显示的媒体文件。</div>`;
+    updateActionAvailability();
+    return;
+  }
+
+  root.innerHTML = state.groups.map((group) => {
+    const meta = groupMetaSummary(group);
+    const rows = (group.files || []).map((file) => fileRowHtml(file)).join("");
+    return `
+      <section class="dateGroup ${state.highlightedGroups.has(group.date_key) ? "group-fresh" : ""}" data-date-key="${escapeHtml(group.date_key)}">
+        <div class="groupHeader">
+          <div class="groupTitle">
+            <span class="groupDate">${escapeHtml(group.date_key)}</span>
+            <span class="groupMeta">${meta.totalCount} files · ${meta.audioCount} audio · ${meta.videoCount} video</span>
+          </div>
+          <div class="groupActions">
+            <button
+              class="btn btn-ghost"
+              type="button"
+              data-merge-by-date="${escapeHtml(group.date_key)}"
+              data-merge-enabled="${meta.mergeable ? "true" : "false"}"
+            >Merge by Date</button>
+          </div>
+        </div>
+        <div class="fileRows">${rows}</div>
+      </section>
+    `;
+  }).join("");
+
+  updateActionAvailability();
+}
+
+function setActiveTab(tabName) {
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.classList.toggle("is-active", tab.dataset.tab === tabName);
+  }
+  for (const pane of document.querySelectorAll(".pane")) {
+    pane.classList.toggle("is-active", pane.dataset.pane === tabName);
+  }
+  writeStorage(TAB_STORAGE_KEY, tabName);
+}
+
+function setCollapsed(collapsed) {
+  const panel = qs("commandPanel");
+  const toggle = qs("panelToggle");
+  const fold = qs("headerFold");
+  panel.dataset.collapsed = collapsed ? "true" : "false";
+  toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+  fold.textContent = collapsed ? "展开" : "收起";
+  writeStorage(PANEL_STORAGE_KEY, collapsed ? "true" : "false");
+}
+
+function setTaskPanel(record, metaOverride = null) {
+  if (!record || !record.task_id) {
+    qs("taskHeadline").textContent = "Idle";
+    qs("taskMeta").textContent = "No running task";
+    qs("taskSubline").textContent = "等待操作。";
+    qs("logBox").textContent = "";
+    updateStatusDecorations(null);
+    return;
+  }
+
+  const taskMeta = metaOverride || state.activeTask;
+  const taskLabel = taskMeta && taskMeta.pillLabel ? taskMeta.pillLabel : "Task";
+  qs("taskHeadline").textContent = taskLabel;
+  qs("taskMeta").textContent = record.status === "running"
+    ? "Running"
+    : (record.status === "done" ? "Completed" : "Error");
+  const lastLog = Array.isArray(record.log) && record.log.length ? record.log[record.log.length - 1] : "";
+  qs("taskSubline").textContent = lastLog || (record.status === "running" ? "处理中…" : "等待操作。");
+  qs("logBox").textContent = Array.isArray(record.log) ? record.log.join("\n") : "";
+  updateStatusDecorations(record.status);
+}
+
+async function fetchObsLocation() {
+  try {
+    const response = await apiGet("/api/obs_location");
+    const input = qs("importPathInput");
+    const hint = qs("importPathHint");
+    if (response && response.path) {
+      if (!input.value.trim()) input.value = response.path;
+      hint.textContent = `已检测到 OBS 目录：${response.path}`;
+      updateActionAvailability();
+      return response.path;
+    }
+    hint.textContent = "未自动检测到 OBS 目录，可手动粘贴路径。";
+    updateActionAvailability();
+    return "";
+  } catch {
+    return "";
+  }
+}
+
 async function refreshAll({ highlightChanges = false, taskMeta = null } = {}) {
   const previousSnapshot = state.fileSnapshot;
-  const st = await apiGet("/api/state");
-  state.cwd = st.cwd || "";
-  state.settings = st.settings || state.settings;
-  qs("cwd").textContent = state.cwd;
-  setBusy(!!st.busy);
-  applySettingsToUI();
+  const previousSelection = new Set(state.selected);
+
+  const appState = await apiGet("/api/state");
+  state.cwd = appState.cwd || "";
+  state.settings = appState.settings || state.settings;
+  state.busy = !!appState.busy;
+  state.currentTaskId = appState.current_task ? appState.current_task.task_id : null;
 
   const files = await apiGet("/api/files");
   state.groups = files.groups || [];
   state.fileSnapshot = buildFileSnapshot(state.groups);
+  state.lastSyncAt = Date.now();
 
-  state.selected = new Set();
-  updateSelectionHint();
+  const nextSelection = new Set();
+  for (const path of previousSelection) {
+    const file = state.fileSnapshot.get(path);
+    if (file && file.checkable && !file.disabled) {
+      nextSelection.add(path);
+    }
+  }
+  state.selected = nextSelection;
+
+  updateSettingsInputs();
   renderFiles();
+  updateTelemetry();
+  setTaskPanel(appState.current_task || null, state.activeTask);
+
+  const cwdCard = qs("cwdCard");
+  cwdCard.textContent = state.cwd;
+  cwdCard.title = state.cwd;
+
   if (highlightChanges) {
     const diff = diffSnapshots(previousSnapshot, state.fileSnapshot, taskMeta);
-    setTransientHighlights(diff.paths, diff.groups);
+    setHighlights(diff.paths, diff.groups);
+    renderFiles();
   } else {
-    clearTransientHighlights();
+    clearHighlights();
   }
-  scheduleFitControlsUi();
-}
-
-function setLog(lines) {
-  const box = qs("logBox");
-  const nextText = (lines || []).join("\n");
-  if (box.textContent === nextText) return;
-  box.textContent = nextText;
-  box.scrollTop = box.scrollHeight;
-  scheduleFitControlsUi();
 }
 
 async function pollTask() {
   try {
-    const t = await apiGet("/api/task/current");
-    if (!t || !t.task_id) {
+    const record = await apiGet("/api/task/current");
+    if (!record || !record.task_id) {
       state.currentTaskId = null;
-      state.activeTask = null;
       state.observedTaskRunning = false;
-      setLog([]);
-      setBusy(false);
+      state.busy = false;
+      state.activeTask = null;
+      setTaskPanel(null);
+      updateActionAvailability();
       return;
     }
 
-    state.currentTaskId = t.task_id;
-    const isRunning = t.status === "running";
+    state.currentTaskId = record.task_id;
+    const isRunning = record.status === "running";
     if (isRunning) state.observedTaskRunning = true;
-    setBusy(isRunning);
-    setLog(t.log || []);
+    state.busy = isRunning;
+    setTaskPanel(record);
+    updateActionAvailability();
 
-    if ((t.status === "done" || t.status === "error") && state.lastHandledFinishedTaskId !== t.task_id) {
+    if ((record.status === "done" || record.status === "error") && state.lastHandledFinishedTaskId !== record.task_id) {
       const taskMeta = state.activeTask;
-      const shouldAnnounce = !!taskMeta || state.observedTaskRunning;
-      state.lastHandledFinishedTaskId = t.task_id;
+      state.lastHandledFinishedTaskId = record.task_id;
       state.observedTaskRunning = false;
 
-      if (shouldAnnounce) {
-        showToast({
-          tone: t.status === "done" ? "success" : "error",
-          title: t.status === "done" ? "Completed" : "Attention",
-          message: t.status === "done"
-            ? formatTaskSuccess(taskMeta, t.result || {})
-            : formatTaskError(taskMeta, t.result || {}),
-        });
-        await refreshAll({ highlightChanges: t.status === "done", taskMeta });
+      if (record.status === "done") {
+        setFeedback("success", formatTaskSuccess(taskMeta, record.result || {}));
+        setWorkspaceNotice("success", formatTaskSuccess(taskMeta, record.result || {}));
+        const origin = taskMeta ? document.querySelector(taskMeta.triggerSelector) : null;
+        flashButton(origin, "✓ Done");
+        await refreshAll({ highlightChanges: true, taskMeta });
+      } else {
+        setFeedback("error", formatTaskError(taskMeta, record.result || {}));
+        setWorkspaceNotice("error", formatTaskError(taskMeta, record.result || {}));
+        await refreshAll();
       }
 
+      state.busy = false;
+      setTaskPanel(record, taskMeta);
       state.activeTask = null;
-      return;
+      updateActionAvailability();
     }
-
-    if (!isRunning && state.lastHandledFinishedTaskId === t.task_id) {
-      state.activeTask = null;
-    }
-  } catch (e) {
-    // ignore transient errors
+  } catch {
+    return;
   }
 }
 
 function ensurePolling() {
   if (state.pollTimer) return;
-  state.pollTimer = setInterval(pollTask, 800);
+  state.pollTimer = window.setInterval(pollTask, 900);
 }
 
 async function startTask(payload, sourceEl = null) {
-  const taskMeta = createTaskMeta(payload);
-  taskMeta.triggerSelector = buildTriggerSelector(sourceEl, taskMeta);
+  const taskMeta = createTaskMeta(payload, sourceEl);
   try {
-    const res = await apiPost("/api/task", payload);
+    const response = await apiPost("/api/task", payload);
     state.activeTask = taskMeta;
-    state.currentTaskId = res.task_id || null;
+    state.currentTaskId = response.task_id || null;
     state.lastHandledFinishedTaskId = null;
     state.observedTaskRunning = true;
-    setLog([]);
-    setBusy(true);
-    showToast({
-      tone: "info",
-      title: "Working",
-      message: formatTaskStart(taskMeta),
+    state.busy = true;
+    setFeedback("info", formatTaskStart(taskMeta));
+    setWorkspaceNotice("info", formatTaskStart(taskMeta));
+    setTaskPanel({
+      task_id: response.task_id,
+      status: "running",
+      log: [],
     });
+    updateActionAvailability();
     ensurePolling();
     await pollTask();
-  } catch (e) {
+  } catch (error) {
     state.activeTask = null;
     state.observedTaskRunning = false;
-    setBusy(false);
-    showToast({
-      tone: "error",
-      title: "Attention",
-      message: e.message || String(e),
-    });
+    state.busy = false;
+    setFeedback("error", error.message || String(error));
+    setWorkspaceNotice("error", error.message || String(error));
+    updateActionAvailability();
   }
-}
-
-async function startMergeByDate(dateKey) {
-  await startTask({ type: "MERGE_BY_DATE", params: { date_key: dateKey } });
 }
 
 function selectedPaths() {
   return Array.from(state.selected);
 }
 
-async function onImport(sourceEl = null) {
-  try {
-    const hint = await apiGet("/api/obs_location");
-    const dialog = qs("importDialog");
-    const input = qs("importPathInput");
-    input.value = (hint && hint.path) ? hint.path : "";
-    dialog.showModal();
-    requestAnimationFrame(() => {
-      input.focus();
-      input.select();
-    });
-
-    const confirmed = await new Promise((resolve) => {
-      dialog.addEventListener("close", () => resolve(dialog.returnValue === "ok"), { once: true });
-    });
-    if (!confirmed) return;
-    const sourceDir = input.value.trim();
-    if (!sourceDir) {
-      showToast({
-        tone: "warning",
-        title: "Attention",
-        message: "Please provide a source directory path.",
-      });
-      return;
-    }
-    await startTask({ type: "IMPORT", params: { source_dir: sourceDir } }, sourceEl);
-  } catch (e) {
-    showToast({
-      tone: "error",
-      title: "Attention",
-      message: e.message || String(e),
-    });
-  }
+async function onImport(sourceEl) {
+  const sourceDir = qs("importPathInput").value.trim();
+  if (!sourceDir) return;
+  await startTask({ type: "IMPORT", params: { source_dir: sourceDir } }, sourceEl);
 }
 
-async function onConvert(sourceEl = null) {
-  const paths = selectedPaths();
-  if (!paths.length) {
-    showToast({
-      tone: "warning",
-      title: "Selection",
-      message: "Select some files first.",
-    });
-    return;
-  }
-  await startTask({ type: "CONVERT", paths }, sourceEl);
+async function onConvert(sourceEl) {
+  await startTask({ type: "CONVERT", paths: selectedPaths() }, sourceEl);
 }
 
-async function onMergeSelected(sourceEl = null) {
-  const paths = selectedPaths();
-  if (!paths.length) {
-    showToast({
-      tone: "warning",
-      title: "Selection",
-      message: "Select some files first.",
-    });
-    return;
-  }
-  await startTask({ type: "MERGE", paths }, sourceEl);
+async function onMerge(sourceEl) {
+  await startTask({ type: "MERGE", paths: selectedPaths() }, sourceEl);
 }
 
-async function onAnnotateTimeRange(sourceEl = null) {
-  const paths = selectedPaths();
-  if (!paths.length) {
-    showToast({
-      tone: "warning",
-      title: "Selection",
-      message: "Select some files first.",
-    });
-    return;
-  }
-  await startTask({ type: "ANNOTATE_TIME_RANGE", paths }, sourceEl);
+async function onAnnotate(sourceEl) {
+  await startTask({ type: "ANNOTATE_TIME_RANGE", paths: selectedPaths() }, sourceEl);
 }
 
-async function onSilence(sourceEl = null) {
-  const paths = selectedPaths();
-  if (!paths.length) {
-    showToast({
-      tone: "warning",
-      title: "Selection",
-      message: "Select some files first.",
-    });
-    return;
-  }
-  await startTask({ type: "REMOVE_SILENCE", paths }, sourceEl);
+async function onSilence(sourceEl) {
+  await startTask({ type: "REMOVE_SILENCE", paths: selectedPaths() }, sourceEl);
 }
 
-async function onOrganize(sourceEl = null) {
-  const ok = confirm("Organize all files by date and create an archive for each folder?");
-  if (!ok) return;
+async function onOrganize(sourceEl) {
+  qs("organizeConfirmBlock").hidden = true;
   await startTask({ type: "ORGANIZE", params: { create_archive: true } }, sourceEl);
 }
 
-async function onSaveSettings(trigger = "manual") {
+function setSettingsStatus(text, tone = "") {
+  const node = qs("settingsStatus");
+  node.textContent = text;
+  node.dataset.tone = tone;
+}
+
+function markSettingsDirty() {
+  if (state.busy || state.settingsSaveInFlight) return;
+  setSettingsStatus("Settings changed. Applying soon…", "pending");
+}
+
+async function saveSettings(trigger = "manual") {
   if (state.settingsSaveInFlight) return;
-  const tz = qs("timezoneSelect").value;
-  const mw = Number(qs("threadsInput").value || "4");
-  const maxWorkers = Math.max(1, Math.min(16, isFinite(mw) ? mw : 4));
-  const ch = Number(qs("cutoffHourInput").value || "4");
-  const cutoffHour = Math.max(0, Math.min(23, isFinite(ch) ? ch : 4));
-  const saveBtn = qs("saveSettingsBtn");
-  const originalLabel = saveBtn ? saveBtn.textContent : "Save Settings";
   state.settingsSaveInFlight = true;
-  if (saveBtn) saveBtn.textContent = "Saving...";
-  setBusy(state.busy);
-  setSettingsStatus("saving", "Applying settings...");
+  updateActionAvailability();
+  const button = qs("saveSettingsBtn");
+  setButtonWorking(button, true, "Applying…");
+  setSettingsStatus("Applying settings…", "saving");
+
+  const timezone = qs("timezoneSelect").value;
+  const maxWorkers = Math.max(1, Math.min(16, Number(qs("threadsInput").value || "4") || 4));
+  const cutoffHour = Math.max(0, Math.min(23, Number(qs("cutoffHourInput").value || "4") || 4));
+
   try {
-    const resp = await apiPost("/api/settings", { timezone: tz, max_workers: maxWorkers, cutoff_hour: cutoffHour });
-    if (resp && resp.settings) state.settings = resp.settings;
-    await refreshAll();
-    const applied = state.settings || {};
-    const ts = new Date().toLocaleTimeString();
-    setSettingsStatus(
-      "ok",
-      `Applied at ${ts}: ${applied.timezone}, threads ${applied.max_workers}, cutoff ${applied.cutoff_hour}.`
-    );
-    if (trigger === "manual") {
-      showToast({
-        tone: "success",
-        title: "Settings",
-        message: "Settings applied.",
-      });
-    }
-  } catch (e) {
-    const msg = e.message || String(e);
-    setSettingsStatus("error", `Save failed: ${msg}`);
-    showToast({
-      tone: "error",
-      title: "Settings",
-      message: `Save failed: ${msg}`,
+    const response = await apiPost("/api/settings", {
+      timezone,
+      max_workers: maxWorkers,
+      cutoff_hour: cutoffHour,
     });
+    if (response && response.settings) {
+      state.settings = response.settings;
+    }
+    await refreshAll();
+    setSettingsStatus(`Applied: ${state.settings.timezone}, threads ${state.settings.max_workers}, cutoff ${state.settings.cutoff_hour}.`, "ok");
+    if (trigger === "manual") {
+      flashButton(button, "✓ Applied");
+    }
+  } catch (error) {
+    setSettingsStatus(`Save failed: ${error.message || String(error)}`, "error");
+    setFeedback("error", error.message || String(error));
+    setWorkspaceNotice("error", error.message || String(error));
   } finally {
     state.settingsSaveInFlight = false;
-    if (saveBtn) saveBtn.textContent = originalLabel;
-    setBusy(state.busy);
+    setButtonWorking(button, false);
+    updateActionAvailability();
   }
 }
 
-function debounce(fn, delayMs) {
-  let t = null;
+function debounce(fn, delay) {
+  let timer = null;
   return (...args) => {
-    if (t) clearTimeout(t);
-    t = setTimeout(() => fn(...args), delayMs);
+    if (timer) clearTimeout(timer);
+    timer = window.setTimeout(() => fn(...args), delay);
   };
 }
 
-function setAll(checked) {
-  const root = qs("filesRoot");
-  let changed = 0;
-  const changedPaths = [];
-  for (const cb of root.querySelectorAll("input[type='checkbox'][data-path]")) {
-    if (cb.disabled) continue;
-    if (cb.checked === checked) continue;
-    cb.checked = checked;
-    const p = cb.getAttribute("data-path");
-    if (!p) continue;
-    if (checked) state.selected.add(p);
-    else state.selected.delete(p);
-    changed += 1;
-    changedPaths.push(p);
+function setAllSelection(checked) {
+  for (const [path, file] of state.fileSnapshot.entries()) {
+    if (!file.checkable || file.disabled) continue;
+    if (checked) state.selected.add(path);
+    else state.selected.delete(path);
   }
-  updateSelectionHint();
-  animateSelectionChange(changedPaths, checked);
-
+  renderFiles();
   if (checked) {
-    if (state.selected.size) {
-      showToast({
-        tone: "info",
-        title: "Selection",
-        message: `Selected ${countLabel(state.selected.size, "file")}.`,
-      });
-    } else {
-      showToast({
-        tone: "warning",
-        title: "Selection",
-        message: "No selectable files available.",
-      });
-    }
-    return;
+    flashButton(qs("selectAllBtn"), "✓ All");
+  } else {
+    flashButton(qs("deselectAllBtn"), "✓ Clear");
   }
+}
 
-  if (changed > 0) {
-    showToast({
-      tone: "info",
-      title: "Selection",
-      message: "Selection cleared.",
-    });
+function handleFileRowToggle(path, checked) {
+  if (!path) return;
+  if (checked) state.selected.add(path);
+  else state.selected.delete(path);
+  updateActionAvailability();
+  renderFiles();
+}
+
+function wireFileEvents() {
+  const root = qs("filesRoot");
+  root.addEventListener("change", (event) => {
+    const checkbox = event.target;
+    if (!checkbox || checkbox.tagName !== "INPUT" || checkbox.type !== "checkbox") return;
+    handleFileRowToggle(checkbox.getAttribute("data-path"), checkbox.checked);
+  });
+
+  root.addEventListener("click", (event) => {
+    const mergeButton = event.target.closest("[data-merge-by-date]");
+    if (mergeButton) {
+      const dateKey = mergeButton.getAttribute("data-merge-by-date");
+      if (dateKey) {
+        startTask({ type: "MERGE_BY_DATE", params: { date_key: dateKey } }, mergeButton);
+      }
+      return;
+    }
+
+    if (event.target.closest("input[type='checkbox']")) return;
+
+    const row = event.target.closest("[data-row-path]");
+    if (!row || row.classList.contains("disabled")) return;
+    const path = row.getAttribute("data-row-path");
+    if (!path) return;
+    const checkbox = row.querySelector(`input[type="checkbox"][data-path="${CSS.escape(path)}"]`);
+    if (checkbox && !checkbox.disabled) {
+      checkbox.checked = !checkbox.checked;
+      handleFileRowToggle(path, checkbox.checked);
+    }
+  });
+}
+
+function initPanelControls() {
+  const initialCollapsed = readStorage(PANEL_STORAGE_KEY, "false") === "true";
+  const initialTab = readStorage(TAB_STORAGE_KEY, "run");
+  setCollapsed(initialCollapsed);
+  setActiveTab(["run", "load", "status"].includes(initialTab) ? initialTab : "run");
+
+  qs("panelToggle").addEventListener("click", () => {
+    const collapsed = qs("commandPanel").dataset.collapsed === "true";
+    setCollapsed(!collapsed);
+  });
+
+  for (const tab of document.querySelectorAll(".tab")) {
+    tab.addEventListener("click", () => setActiveTab(tab.dataset.tab));
   }
 }
 
 async function init() {
-  const filesRoot = qs("filesRoot");
-  filesRoot.addEventListener("change", (e) => {
-    const cb = e.target;
-    if (!cb || cb.tagName !== "INPUT" || cb.type !== "checkbox") return;
-    const p = cb.getAttribute("data-path");
-    if (!p) return;
-    if (cb.checked) state.selected.add(p);
-    else state.selected.delete(p);
-    updateSelectionHint();
-    animateSelectionChange([p], cb.checked);
-  });
+  initPanelControls();
+  wireFileEvents();
 
-  filesRoot.addEventListener("click", (e) => {
-    const btn = e.target.closest("[data-merge-by-date]");
-    if (btn) {
-      const dk = btn.getAttribute("data-merge-by-date");
-      if (dk) startTask({ type: "MERGE_BY_DATE", params: { date_key: dk } }, btn);
-      return;
+  qs("refreshBtn").addEventListener("click", async (event) => {
+    try {
+      await refreshAll();
+      flashButton(event.currentTarget, "✓ Synced");
+      setWorkspaceNotice("success", "文件列表已刷新。");
+    } catch (error) {
+      setFeedback("error", error.message || String(error));
+      setWorkspaceNotice("error", error.message || String(error));
     }
-
-    if (e.target.closest("input[type='checkbox']")) return;
-
-    const row = e.target.closest("[data-row-path]");
-    if (!row) return;
-    const p = row.getAttribute("data-row-path");
-    if (!p) return;
-    const cb = row.querySelector(`input[type="checkbox"][data-path="${CSS.escape(p)}"]`);
-    if (cb && !cb.disabled) cb.click();
   });
 
-  qs("refreshBtn").addEventListener("click", () => {
-    refreshAll().catch((e) => {
-      showToast({
-        tone: "error",
-        title: "Attention",
-        message: e.message || String(e),
-      });
-    });
+  qs("runRefreshBtn").addEventListener("click", async (event) => {
+    try {
+      await refreshAll();
+      flashButton(event.currentTarget, "✓ Synced");
+    } catch (error) {
+      setFeedback("error", error.message || String(error));
+      setWorkspaceNotice("error", error.message || String(error));
+    }
   });
-  qs("importBtn").addEventListener("click", (e) => onImport(e.currentTarget));
-  qs("convertBtn").addEventListener("click", (e) => onConvert(e.currentTarget));
-  qs("mergeBtn").addEventListener("click", (e) => onMergeSelected(e.currentTarget));
-  qs("annotateBtn").addEventListener("click", (e) => onAnnotateTimeRange(e.currentTarget));
-  qs("silenceBtn").addEventListener("click", (e) => onSilence(e.currentTarget));
-  qs("organizeBtn").addEventListener("click", (e) => onOrganize(e.currentTarget));
-  qs("saveSettingsBtn").addEventListener("click", () => onSaveSettings("manual"));
-  qs("selectAllBtn").addEventListener("click", () => setAll(true));
-  qs("deselectAllBtn").addEventListener("click", () => setAll(false));
 
+  qs("selectAllBtn").addEventListener("click", () => setAllSelection(true));
+  qs("deselectAllBtn").addEventListener("click", () => setAllSelection(false));
+
+  qs("mergeBtn").addEventListener("click", (event) => onMerge(event.currentTarget));
+  qs("convertBtn").addEventListener("click", (event) => onConvert(event.currentTarget));
+  qs("annotateBtn").addEventListener("click", (event) => onAnnotate(event.currentTarget));
+  qs("silenceBtn").addEventListener("click", (event) => onSilence(event.currentTarget));
+
+  qs("detectObsBtn").addEventListener("click", async (event) => {
+    const path = await fetchObsLocation();
+    if (path) {
+      flashButton(event.currentTarget, "✓ Filled");
+      setFeedback("success", "已填入检测到的 OBS 目录。");
+    } else {
+      setFeedback("warning", "没有检测到 OBS 路径，请手动输入。");
+    }
+  });
+
+  qs("importBtn").addEventListener("click", (event) => onImport(event.currentTarget));
+  qs("importPathInput").addEventListener("input", () => updateActionAvailability());
+
+  qs("saveSettingsBtn").addEventListener("click", () => saveSettings("manual"));
   const autoSave = debounce(() => {
-    if (state.busy) return;
-    onSaveSettings("auto");
-  }, 350);
-  qs("timezoneSelect").addEventListener("change", () => {
-    markSettingsDirty();
-    autoSave();
-  });
-  qs("threadsInput").addEventListener("change", () => {
-    markSettingsDirty();
-    autoSave();
-  });
-  qs("threadsInput").addEventListener("blur", autoSave);
-  qs("cutoffHourInput").addEventListener("change", () => {
-    markSettingsDirty();
-    autoSave();
-  });
-  qs("cutoffHourInput").addEventListener("blur", autoSave);
-  window.addEventListener("resize", debounce(scheduleFitControlsUi, 80));
+    if (!state.busy) saveSettings("auto");
+  }, 360);
 
-  applySettingsToUI();
-  setSettingsStatus("ok", "Settings loaded.");
-  await refreshAll();
-  playBootChoreography();
-  scheduleFitControlsUi();
-  ensurePolling();
+  for (const id of ["timezoneSelect", "threadsInput", "cutoffHourInput"]) {
+    qs(id).addEventListener("change", () => {
+      markSettingsDirty();
+      autoSave();
+    });
+    qs(id).addEventListener("blur", autoSave);
+  }
+
+  qs("organizeArmBtn").addEventListener("click", (event) => {
+    qs("organizeConfirmBlock").hidden = false;
+    flashButton(event.currentTarget, "Confirm below", "is-working", 1200);
+  });
+  qs("organizeCancelBtn").addEventListener("click", () => {
+    qs("organizeConfirmBlock").hidden = true;
+  });
+  qs("organizeConfirmBtn").addEventListener("click", (event) => onOrganize(event.currentTarget));
+
+  updateSettingsInputs();
+  setSettingsStatus("Settings loaded.");
+
+  try {
+    await refreshAll();
+    await fetchObsLocation();
+    ensurePolling();
+    await pollTask();
+  } catch (error) {
+    setFeedback("error", error.message || String(error));
+    setWorkspaceNotice("error", error.message || String(error), true);
+  }
 }
 
-init().catch((e) => {
-  alert(e.message || String(e));
-});
+init();

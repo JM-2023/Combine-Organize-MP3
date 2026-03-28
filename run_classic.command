@@ -1,14 +1,11 @@
 #!/bin/bash
-# Audio Toolbox - macOS Double-Click Launcher (Web UI)
+# Audio Toolbox - macOS Double-Click Launcher (Classic Web UI)
 
-# Change to script directory
 cd "$(dirname "$0")"
 
-# Display startup info
-echo "Starting Audio Toolbox Web UI..."
+echo "Starting Audio Toolbox Classic Web UI..."
 echo "================================"
 
-# Check Python
 if ! command -v python3 &> /dev/null; then
     echo "❌ Python 3 not found. Please install Python 3.8 or later."
     echo "Press Enter to exit..."
@@ -16,7 +13,6 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# Check/create virtual environment
 if [ ! -d ".venv" ]; then
     echo "Creating virtual environment..."
     python3 -m venv .venv
@@ -27,14 +23,11 @@ else
     fi
 fi
 
-# Run the application
 echo "================================"
 echo "Starting server (it will open Chrome)..."
-echo "Default route: new floating command deck"
-echo "Classic route: /classic/"
-./.venv/bin/python web_server.py --open-path /
+echo "Target route: classic Web UI"
+./.venv/bin/python web_server.py --open-path /classic/
 
-# Keep terminal open on error
 if [ $? -ne 0 ]; then
     echo ""
     echo "❌ Program exited with error. Press Enter to close..."
