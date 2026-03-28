@@ -70,6 +70,34 @@ def _validate_rel_path(rel: str) -> Tuple[bool, str]:
     return True, ""
 
 
+def _resolve_static_request(modern_dir: Path, classic_dir: Path, url_path: str) -> Tuple[Optional[Path], str, Optional[str]]:
+    if url_path == "/":
+        return modern_dir, "index.html", None
+    if url_path == "/classic":
+        return None, "", "/classic/"
+    if url_path == "/classic/":
+        return classic_dir, "index.html", None
+    if url_path.startswith("/classic/"):
+        return classic_dir, url_path[len("/classic/"):], None
+    return modern_dir, url_path.lstrip("/"), None
+
+
+def _normalize_open_path(path: str) -> str:
+    cleaned = (path or "/").strip()
+    if not cleaned:
+        return "/"
+    if not cleaned.startswith("/"):
+        cleaned = f"/{cleaned}"
+    return cleaned
+
+
+def _build_open_url(base_url: str, open_path: str) -> str:
+    normalized = _normalize_open_path(open_path)
+    if normalized == "/":
+        return base_url
+    return f"{base_url.rstrip('/')}{normalized}"
+
+
 def _open_chrome(url: str) -> bool:
     try:
         result = subprocess.run(
@@ -174,6 +202,7 @@ class AudioToolboxApp:
     def __init__(self, root_dir: Path):
         self.root_dir = root_dir
         self.webui_dir = root_dir / "webui"
+        self.classic_webui_dir = root_dir / "webui_classic"
         self.state_path = Path.cwd() / ".audio_toolbox" / "state.json"
 
         self._lock = threading.RLock()
@@ -532,10 +561,23 @@ class RequestHandler(BaseHTTPRequestHandler):
             self._handle_api_get(path)
             return
 
-        if path == "/":
-            path = "/index.html"
+        static_root, rel_path, redirect_path = _resolve_static_request(
+            self.app.webui_dir,
+            self.app.classic_webui_dir,
+            path,
+        )
+        if redirect_path:
+            self.send_response(HTTPStatus.FOUND)
+            self.send_header("Location", redirect_path)
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
 
-        self._serve_static(path)
+        if not static_root:
+            self.send_error(HTTPStatus.NOT_FOUND, "Not Found")
+            return
+
+        self._serve_static(static_root, rel_path)
 
     def do_POST(self) -> None:
         parsed = urlparse(self.path)
@@ -620,10 +662,9 @@ class RequestHandler(BaseHTTPRequestHandler):
 
         _json_response(self, HTTPStatus.NOT_FOUND, {"error": "Not Found"})
 
-    def _serve_static(self, url_path: str) -> None:
-        rel = url_path.lstrip("/")
-        file_path = (self.app.webui_dir / rel).resolve()
-        if not _path_is_within(self.app.webui_dir.resolve(), file_path):
+    def _serve_static(self, static_root: Path, rel_path: str) -> None:
+        file_path = (static_root / rel_path).resolve()
+        if not _path_is_within(static_root.resolve(), file_path):
             self.send_error(HTTPStatus.FORBIDDEN, "Forbidden")
             return
         if not file_path.exists() or not file_path.is_file():
@@ -647,6 +688,7 @@ def main() -> int:
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=0)
     parser.add_argument("--no-browser", action="store_true")
+    parser.add_argument("--open-path", default="/", help="Browser path to open on startup, e.g. / or /classic/")
     args = parser.parse_args()
 
     root_dir = Path(__file__).resolve().parent
@@ -657,14 +699,17 @@ def main() -> int:
 
     host, port = server.server_address[:2]
     url = f"http://{host}:{port}/"
+    browser_url = _build_open_url(url, args.open_path)
 
     print("Audio Toolbox Web UI")
-    print(f"Serving: {url}")
+    print(f"Modern UI: {url}")
+    print(f"Classic UI: {url}classic/")
+    print(f"Browser target: {browser_url}")
     print(f"CWD: {Path.cwd()}")
     print("Press Ctrl+C to stop.")
 
     if not args.no_browser:
-        _open_chrome(url)
+        _open_chrome(browser_url)
 
     try:
         server.serve_forever()
