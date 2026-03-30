@@ -1,3 +1,4 @@
+
 const TIMEZONES = [
   "UTC",
   "US/Eastern",
@@ -10,6 +11,8 @@ const TIMEZONES = [
 
 const PANEL_STORAGE_KEY = "audio-toolbox-panel-collapsed";
 const TAB_STORAGE_KEY = "audio-toolbox-panel-tab";
+const THEME_STORAGE_KEY = "audio-toolbox-theme-mode";
+const FILE_FILTER_STORAGE_KEY = "audio-toolbox-file-filter";
 const FEEDBACK_MS = 3600;
 const BUTTON_FLASH_MS = 1400;
 const HIGHLIGHT_MS = 2200;
@@ -18,93 +21,71 @@ const TASK_COPY = {
   IMPORT: {
     pillLabel: "Import",
     runningLabel: "Importing…",
-    start: () => "开始导入 OBS 录屏。",
+    start: () => "Starting OBS import.",
     success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `导入完成，已移动 ${count} 个文件。` : "导入完成。";
+      return count > 0 ? `Import complete. Moved ${count} files.` : "Import complete.";
     },
-    failure: "导入失败",
+    failure: "Import failed",
   },
   CONVERT: {
     pillLabel: "Convert",
     runningLabel: "Converting…",
-    start: (meta) => `开始转换 ${meta.count || 0} 个视频为 MP3。`,
+    start: (meta) => `Starting MP3 conversion for ${meta.count || 0} videos.`,
     success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `转换完成，共处理 ${count} 个视频。` : "转换完成。";
+      return count > 0 ? `Conversion complete. Processed ${count} videos.` : "Conversion complete.";
     },
-    failure: "转换失败",
+    failure: "Conversion failed",
   },
   MERGE: {
     pillLabel: "Merge",
     runningLabel: "Merging…",
-    start: (meta) => `开始合并 ${meta.count || 0} 个音频文件。`,
-    success: () => "合并完成。",
-    failure: "合并失败",
+    start: (meta) => `Starting merge for ${meta.count || 0} audio files.`,
+    success: () => "Merge complete.",
+    failure: "Merge failed",
   },
   MERGE_BY_DATE: {
-    pillLabel: "Merge Day",
+    pillLabel: "Date Merge",
     runningLabel: "Merging…",
-    start: (meta) => `开始合并 ${meta.dateKey || "该日期"} 的文件。`,
-    success: () => "按日期合并完成。",
-    failure: "按日期合并失败",
+    start: (meta) => `Starting merge for ${meta.dateKey || "this date"}.`,
+    success: () => "Date merge complete.",
+    failure: "Date merge failed",
   },
   ANNOTATE_TIME_RANGE: {
-    pillLabel: "Notes",
-    runningLabel: "Annotating…",
-    start: (meta) => `开始为 ${meta.count || 0} 个文件写入时间注释。`,
+    pillLabel: "Annotate",
+    runningLabel: "Writing…",
+    start: (meta) => `Starting time annotation for ${meta.count || 0} files.`,
     success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `时间注释已写入 ${count} 个文件。` : "时间注释完成。";
+      return count > 0 ? `Time annotations written to ${count} files.` : "Time annotation complete.";
     },
-    failure: "时间注释失败",
+    failure: "Time annotation failed",
   },
   REMOVE_SILENCE: {
     pillLabel: "Silence",
-    runningLabel: "Cleaning…",
-    start: (meta) => `开始处理 ${meta.count || 0} 个音频的静音段。`,
+    runningLabel: "Processing…",
+    start: (meta) => `Starting silence removal for ${meta.count || 0} audio files.`,
     success: (result) => {
       const count = Number(result && result.processed_count);
-      return count > 0 ? `静音处理完成，共 ${count} 个文件。` : "静音处理完成。";
+      return count > 0 ? `Silence removal complete for ${count} files.` : "Silence removal complete.";
     },
-    failure: "静音处理失败",
+    failure: "Silence removal failed",
   },
   ORGANIZE: {
     pillLabel: "Organize",
     runningLabel: "Organizing…",
-    start: () => "开始按日期整理当前工作目录。",
-    success: () => "整理完成。",
-    failure: "整理失败",
+    start: () => "Starting library organization by date.",
+    success: () => "Organization complete.",
+    failure: "Organization failed",
   },
   DEFAULT: {
     pillLabel: "Task",
     runningLabel: "Working…",
-    start: () => "任务启动中。",
-    success: () => "任务完成。",
-    failure: "任务失败",
+    start: () => "Starting task.",
+    success: () => "Task complete.",
+    failure: "Task failed",
   },
-};
-
-const state = {
-  cwd: "",
-  busy: false,
-  settings: { timezone: "Asia/Shanghai", max_workers: 4, cutoff_hour: 4 },
-  groups: [],
-  fileSnapshot: new Map(),
-  selected: new Set(),
-  currentTaskId: null,
-  lastHandledFinishedTaskId: null,
-  activeTask: null,
-  observedTaskRunning: false,
-  settingsSaveInFlight: false,
-  pollTimer: null,
-  feedbackTimer: null,
-  workspaceNoticeTimer: null,
-  buttonTimers: new Map(),
-  highlightTimer: null,
-  highlightedPaths: new Set(),
-  highlightedGroups: new Set(),
-  lastSyncAt: null,
 };
 
 function qs(id) {
@@ -128,6 +109,40 @@ function writeStorage(key, value) {
   }
 }
 
+function normalizeThemeMode(value) {
+  return ["system", "light", "dark"].includes(value) ? value : "system";
+}
+
+function normalizeFileFilter(value) {
+  return ["all", "actionable", "audio", "video", "selected"].includes(value) ? value : "all";
+}
+
+const state = {
+  cwd: "",
+  busy: false,
+  settings: { timezone: "Asia/Shanghai", max_workers: 4, cutoff_hour: 4 },
+  groups: [],
+  fileSnapshot: new Map(),
+  selected: new Set(),
+  currentTaskId: null,
+  lastHandledFinishedTaskId: null,
+  activeTask: null,
+  observedTaskRunning: false,
+  settingsSaveInFlight: false,
+  pollTimer: null,
+  feedbackTimer: null,
+  workspaceNoticeTimer: null,
+  buttonTimers: new Map(),
+  highlightTimer: null,
+  highlightedPaths: new Set(),
+  highlightedGroups: new Set(),
+  lastSyncAt: null,
+  query: "",
+  fileFilter: normalizeFileFilter(readStorage(FILE_FILTER_STORAGE_KEY, "all")),
+  themeMode: normalizeThemeMode(readStorage(THEME_STORAGE_KEY, "system")),
+  resolvedTheme: "dark",
+};
+
 function escapeHtml(value) {
   return String(value)
     .replaceAll("&", "&amp;")
@@ -135,10 +150,6 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
-}
-
-function countLabel(count, noun) {
-  return `${count} ${noun}${count === 1 ? "" : "s"}`;
 }
 
 function formatRelativeTime(ts) {
@@ -150,7 +161,9 @@ function formatRelativeTime(ts) {
   const minutes = Math.floor(seconds / 60);
   if (minutes < 60) return `${minutes}m ago`;
   const hours = Math.floor(minutes / 60);
-  return `${hours}h ago`;
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return `${days}d ago`;
 }
 
 function getTaskCopy(type) {
@@ -169,12 +182,13 @@ function createTaskMeta(payload, sourceEl) {
   const params = payload && typeof payload.params === "object" ? payload.params : {};
   const paths = Array.isArray(payload && payload.paths) ? payload.paths : [];
   const type = String((payload && payload.type) || "").toUpperCase() || "DEFAULT";
+  const dateKey = typeof params.date_key === "string" ? params.date_key : "";
   const copy = getTaskCopy(type);
   return {
     type,
     count: paths.length,
-    dateKey: typeof params.date_key === "string" ? params.date_key : "",
-    triggerSelector: buildTriggerSelector(sourceEl, { type, dateKey: typeof params.date_key === "string" ? params.date_key : "" }),
+    dateKey,
+    triggerSelector: buildTriggerSelector(sourceEl, { type, dateKey }),
     pillLabel: copy.pillLabel,
     runningLabel: copy.runningLabel,
   };
@@ -191,7 +205,7 @@ function formatTaskSuccess(meta, result) {
 function formatTaskError(meta, result) {
   const copy = getTaskCopy(meta && meta.type);
   const detail = result && result.error ? String(result.error).trim() : "";
-  return detail ? `${copy.failure}: ${detail}` : `${copy.failure}。`;
+  return detail ? `${copy.failure}: ${detail}` : `${copy.failure}.`;
 }
 
 function buildFileSnapshot(groups) {
@@ -256,6 +270,7 @@ function setHighlights(paths, groups) {
 
 function setFeedback(tone, message) {
   const strip = qs("feedbackStrip");
+  if (!strip) return;
   if (!message) {
     strip.hidden = true;
     strip.textContent = "";
@@ -278,6 +293,7 @@ function setFeedback(tone, message) {
 
 function setWorkspaceNotice(tone, message, persist = false) {
   const box = qs("workspaceNotice");
+  if (!box) return;
   if (!message) {
     box.hidden = true;
     box.textContent = "";
@@ -379,9 +395,97 @@ function librarySummary() {
   return { groups, files };
 }
 
+function resolveSystemTheme() {
+  return window.matchMedia && window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(mode, { persist = true } = {}) {
+  state.themeMode = normalizeThemeMode(mode);
+  state.resolvedTheme = state.themeMode === "system" ? resolveSystemTheme() : state.themeMode;
+
+  document.documentElement.dataset.themeMode = state.themeMode;
+  document.documentElement.dataset.theme = state.resolvedTheme;
+  document.documentElement.style.colorScheme = state.resolvedTheme;
+
+  if (persist) {
+    writeStorage(THEME_STORAGE_KEY, state.themeMode);
+  }
+
+  for (const button of document.querySelectorAll("[data-theme-mode]")) {
+    button.classList.toggle("is-active", button.getAttribute("data-theme-mode") === state.themeMode);
+    button.setAttribute("aria-pressed", button.classList.contains("is-active") ? "true" : "false");
+  }
+
+  const textMap = {
+    system: `Follow system (currently ${state.resolvedTheme === "dark" ? "dark" : "light"})`,
+    light: "Light theme enabled",
+    dark: "Dark theme enabled",
+  };
+  const statusText = textMap[state.themeMode] || textMap.system;
+
+  if (qs("themeStatusText")) qs("themeStatusText").textContent = statusText;
+  if (qs("themeModeExplain")) qs("themeModeExplain").textContent = `Current theme: ${statusText}`;
+}
+
+function fileMatchesFilter(file) {
+  switch (state.fileFilter) {
+    case "actionable":
+      return !!file.checkable && !file.disabled;
+    case "audio":
+      return !!file.is_audio;
+    case "video":
+      return !!file.is_video;
+    case "selected":
+      return state.selected.has(file.path);
+    case "all":
+    default:
+      return true;
+  }
+}
+
+function fileMatchesQuery(file) {
+  const query = state.query.trim().toLowerCase();
+  if (!query) return true;
+  const haystack = [
+    file.display,
+    file.path,
+    file.state,
+    file.format,
+    file.time,
+    file.size,
+    file.dateKey,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return haystack.includes(query);
+}
+
+function getVisibleGroups() {
+  const visible = [];
+  for (const group of state.groups || []) {
+    const files = (group.files || []).filter((file) => fileMatchesFilter(file) && fileMatchesQuery(file));
+    if (files.length) {
+      visible.push({ ...group, files });
+    }
+  }
+  return visible;
+}
+
+function visibleSummary() {
+  const visibleGroups = getVisibleGroups();
+  let files = 0;
+  for (const group of visibleGroups) {
+    files += (group.files || []).length;
+  }
+  return { groups: visibleGroups.length, files };
+}
+
 function updateTelemetry() {
   const summary = selectionSummary();
   const library = librarySummary();
+  const visible = visibleSummary();
   const currentTask = state.activeTask ? (state.activeTask.pillLabel || state.activeTask.type) : "Idle";
 
   qs("selectionHeadline").textContent = `${summary.total} files selected`;
@@ -391,7 +495,23 @@ function updateTelemetry() {
 
   qs("selectionCountCard").textContent = String(summary.total);
   qs("libraryCountCard").textContent = `${library.groups} groups / ${library.files} files`;
-  qs("timelineSummary").textContent = `${library.groups} 个分组，${library.files} 个文件`;
+  qs("resultSummary").textContent = `${visible.groups} groups / ${visible.files} files visible`;
+  qs("timelineSummary").textContent = `${library.groups} groups · ${library.files} files`;
+
+  const filterLabelMap = {
+    all: "All",
+    actionable: "Actionable",
+    audio: "Audio",
+    video: "Video",
+    selected: "Selected",
+  };
+  const query = state.query.trim();
+  const queryPieces = [];
+  if (state.fileFilter !== "all") queryPieces.push(`Filter: ${filterLabelMap[state.fileFilter]}`);
+  if (query) queryPieces.push(`Search: "${query}"`);
+  qs("queryMeta").textContent = queryPieces.length
+    ? `View: ${queryPieces.join(" · ")} · ${visible.files} results`
+    : "Showing all files";
 
   qs("statusCurrentTask").textContent = currentTask;
   qs("statusSelection").textContent = `${summary.total} files`;
@@ -399,7 +519,7 @@ function updateTelemetry() {
   qs("statusLastSync").textContent = formatRelativeTime(state.lastSyncAt);
 
   const statusWord = state.busy
-    ? (state.activeTask && state.activeTask.pillLabel ? state.activeTask.pillLabel : "Busy")
+    ? (state.activeTask && state.activeTask.pillLabel ? state.activeTask.pillLabel : "Running")
     : "Idle";
   qs("headerSummary").textContent = `${statusWord} | ${summary.total} selected | ${library.files} files`;
 }
@@ -419,16 +539,34 @@ function updateStatusDecorations(taskState) {
   const dot = qs("stateDot");
   const panelProgress = qs("panelProgress");
   const logBox = qs("logBox");
+  const taskBadge = qs("taskBadge");
+
+  document.body.dataset.busy = state.busy ? "true" : "false";
   dot.classList.remove("busy", "error");
   panelProgress.classList.toggle("is-busy", state.busy);
   logBox.classList.toggle("is-busy", state.busy);
 
+  taskBadge.removeAttribute("data-status");
   if (taskState === "error") {
     dot.classList.add("error");
+    taskBadge.dataset.status = "error";
     return;
   }
-  if (state.busy) {
+  if (taskState === "done") {
+    taskBadge.dataset.status = "done";
+    return;
+  }
+  if (state.busy || taskState === "running") {
     dot.classList.add("busy");
+    taskBadge.dataset.status = "running";
+  }
+}
+
+function syncFilterButtons() {
+  for (const button of document.querySelectorAll("[data-file-filter]")) {
+    const active = button.getAttribute("data-file-filter") === state.fileFilter;
+    button.classList.toggle("is-active", active);
+    button.setAttribute("aria-pressed", active ? "true" : "false");
   }
 }
 
@@ -466,7 +604,20 @@ function updateActionAvailability() {
     setButtonWorking(origin, state.busy, state.activeTask.runningLabel);
   }
 
+  syncFilterButtons();
   updateTelemetry();
+}
+
+function highlightMatch(text, query) {
+  const safeText = String(text || "");
+  const q = String(query || "").trim();
+  if (!q) return escapeHtml(safeText);
+  const lowerText = safeText.toLowerCase();
+  const lowerQuery = q.toLowerCase();
+  const idx = lowerText.indexOf(lowerQuery);
+  if (idx < 0) return escapeHtml(safeText);
+  const end = idx + q.length;
+  return `${escapeHtml(safeText.slice(0, idx))}<mark>${escapeHtml(safeText.slice(idx, end))}</mark>${escapeHtml(safeText.slice(end))}`;
 }
 
 function fileRowHtml(file) {
@@ -482,10 +633,15 @@ function fileRowHtml(file) {
     : `<div class="fileCheck"></div>`;
 
   return `
-    <div class="fileRow ${disabled ? "disabled" : ""} ${selected ? "selected" : ""} ${fresh ? "fresh" : ""} ${styleClass}" data-row-path="${escapeHtml(file.path)}" aria-selected="${selected ? "true" : "false"}">
+    <div
+      class="fileRow ${disabled ? "disabled" : ""} ${selected ? "selected" : ""} ${fresh ? "fresh" : ""} ${styleClass}"
+      data-row-path="${escapeHtml(file.path)}"
+      aria-selected="${selected ? "true" : "false"}"
+      ${disabled ? "" : 'tabindex="0"'}
+    >
       ${checkbox}
       <div class="fileMain" title="${escapeHtml(file.display || file.path)}">
-        <span class="fileName">${escapeHtml(file.display || file.path)}</span>
+        <span class="fileName">${highlightMatch(file.display || file.path, state.query)}</span>
         ${formatBadge}
       </div>
       <div class="fileMeta">${escapeHtml(file.time || "")}</div>
@@ -499,10 +655,12 @@ function groupMetaSummary(group) {
   const files = group.files || [];
   const audioCount = files.filter((file) => file.is_audio).length;
   const videoCount = files.filter((file) => file.is_video).length;
-  const mergeable = files.some((file) => file.is_audio && file.checkable && !file.disabled);
+  const actionableCount = files.filter((file) => file.checkable && !file.disabled && file.is_audio).length;
+  const mergeable = actionableCount > 0;
   return {
     audioCount,
     videoCount,
+    actionableCount,
     totalCount: files.length,
     mergeable,
   };
@@ -510,21 +668,30 @@ function groupMetaSummary(group) {
 
 function renderFiles() {
   const root = qs("filesRoot");
+  const visibleGroups = getVisibleGroups();
+
   if (!state.groups.length) {
-    root.innerHTML = `<div class="emptyState">当前目录没有可显示的媒体文件。</div>`;
+    root.innerHTML = `<div class="emptyState">No media files are available in the current directory.</div>`;
     updateActionAvailability();
     return;
   }
 
-  root.innerHTML = state.groups.map((group) => {
+  if (!visibleGroups.length) {
+    root.innerHTML = `<div class="emptyState">No matches for the current filter. Try changing filters or clearing the search.</div>`;
+    updateActionAvailability();
+    return;
+  }
+
+  root.innerHTML = visibleGroups.map((group) => {
     const meta = groupMetaSummary(group);
     const rows = (group.files || []).map((file) => fileRowHtml(file)).join("");
+    const accentStyle = group.color ? ` style="--group-accent:${escapeHtml(group.color)}"` : "";
     return `
-      <section class="dateGroup ${state.highlightedGroups.has(group.date_key) ? "group-fresh" : ""}" data-date-key="${escapeHtml(group.date_key)}">
+      <section class="dateGroup ${state.highlightedGroups.has(group.date_key) ? "group-fresh" : ""}" data-date-key="${escapeHtml(group.date_key)}"${accentStyle}>
         <div class="groupHeader">
           <div class="groupTitle">
             <span class="groupDate">${escapeHtml(group.date_key)}</span>
-            <span class="groupMeta">${meta.totalCount} files · ${meta.audioCount} audio · ${meta.videoCount} video</span>
+            <span class="groupMeta">${meta.totalCount} files · ${meta.audioCount} audio · ${meta.videoCount} video · ${meta.actionableCount} ready</span>
           </div>
           <div class="groupActions">
             <button
@@ -532,7 +699,7 @@ function renderFiles() {
               type="button"
               data-merge-by-date="${escapeHtml(group.date_key)}"
               data-merge-enabled="${meta.mergeable ? "true" : "false"}"
-            >Merge by Date</button>
+            >Merge Day</button>
           </div>
         </div>
         <div class="fileRows">${rows}</div>
@@ -540,6 +707,45 @@ function renderFiles() {
     `;
   }).join("");
 
+  updateActionAvailability();
+}
+
+function replaySelectionFlash(row) {
+  if (!row) return;
+  row.classList.remove("selection-flash");
+  void row.offsetWidth;
+  row.classList.add("selection-flash");
+  row.addEventListener("animationend", () => {
+    row.classList.remove("selection-flash");
+  }, { once: true });
+}
+
+function syncVisibleSelectionState({ animatePaths = [] } = {}) {
+  const animateSet = new Set(animatePaths);
+  for (const row of document.querySelectorAll("[data-row-path]")) {
+    const path = row.getAttribute("data-row-path");
+    if (!path) continue;
+    const selected = state.selected.has(path);
+    row.classList.toggle("selected", selected);
+    row.setAttribute("aria-selected", selected ? "true" : "false");
+
+    const checkbox = row.querySelector("input[type='checkbox'][data-path]");
+    if (checkbox) checkbox.checked = selected;
+
+    if (selected && animateSet.has(path)) {
+      replaySelectionFlash(row);
+    } else {
+      row.classList.remove("selection-flash");
+    }
+  }
+}
+
+function refreshSelectionUi({ animatePaths = [] } = {}) {
+  if (state.fileFilter === "selected") {
+    renderFiles();
+    return;
+  }
+  syncVisibleSelectionState({ animatePaths });
   updateActionAvailability();
 }
 
@@ -558,16 +764,18 @@ function setCollapsed(collapsed) {
   const toggle = qs("panelToggle");
   const fold = qs("headerFold");
   panel.dataset.collapsed = collapsed ? "true" : "false";
+  document.body.dataset.panelCollapsed = collapsed ? "true" : "false";
   toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
-  fold.textContent = collapsed ? "展开" : "收起";
+  fold.textContent = collapsed ? "Expand" : "Collapse";
   writeStorage(PANEL_STORAGE_KEY, collapsed ? "true" : "false");
 }
 
 function setTaskPanel(record, metaOverride = null) {
   if (!record || !record.task_id) {
     qs("taskHeadline").textContent = "Idle";
-    qs("taskMeta").textContent = "No running task";
-    qs("taskSubline").textContent = "等待操作。";
+    qs("taskMeta").textContent = "No active task";
+    qs("taskSubline").textContent = "Waiting for action.";
+    qs("taskBadge").textContent = "Idle";
     qs("logBox").textContent = "";
     updateStatusDecorations(null);
     return;
@@ -575,28 +783,31 @@ function setTaskPanel(record, metaOverride = null) {
 
   const taskMeta = metaOverride || state.activeTask;
   const taskLabel = taskMeta && taskMeta.pillLabel ? taskMeta.pillLabel : "Task";
-  qs("taskHeadline").textContent = taskLabel;
-  qs("taskMeta").textContent = record.status === "running"
+  const stateLabel = record.status === "running"
     ? "Running"
-    : (record.status === "done" ? "Completed" : "Error");
+    : (record.status === "done" ? "Done" : "Failed");
   const lastLog = Array.isArray(record.log) && record.log.length ? record.log[record.log.length - 1] : "";
-  qs("taskSubline").textContent = lastLog || (record.status === "running" ? "处理中…" : "等待操作。");
+
+  qs("taskHeadline").textContent = taskLabel;
+  qs("taskMeta").textContent = stateLabel;
+  qs("taskSubline").textContent = lastLog || (record.status === "running" ? "Working…" : "Waiting for action.");
+  qs("taskBadge").textContent = stateLabel;
   qs("logBox").textContent = Array.isArray(record.log) ? record.log.join("\n") : "";
   updateStatusDecorations(record.status);
 }
 
-async function fetchObsLocation() {
+async function fetchObsLocation({ overwriteInput = false } = {}) {
   try {
     const response = await apiGet("/api/obs_location");
     const input = qs("importPathInput");
     const hint = qs("importPathHint");
     if (response && response.path) {
-      if (!input.value.trim()) input.value = response.path;
-      hint.textContent = `已检测到 OBS 目录：${response.path}`;
+      if (overwriteInput || !input.value.trim()) input.value = response.path;
+      hint.textContent = `Detected OBS directory: ${response.path}`;
       updateActionAvailability();
       return response.path;
     }
-    hint.textContent = "未自动检测到 OBS 目录，可手动粘贴路径。";
+    hint.textContent = "OBS directory was not detected automatically. Paste a path manually.";
     updateActionAvailability();
     return "";
   } catch {
@@ -607,6 +818,8 @@ async function fetchObsLocation() {
 async function refreshAll({ highlightChanges = false, taskMeta = null } = {}) {
   const previousSnapshot = state.fileSnapshot;
   const previousSelection = new Set(state.selected);
+
+  clearHighlights();
 
   const appState = await apiGet("/api/state");
   state.cwd = appState.cwd || "";
@@ -641,8 +854,6 @@ async function refreshAll({ highlightChanges = false, taskMeta = null } = {}) {
     const diff = diffSnapshots(previousSnapshot, state.fileSnapshot, taskMeta);
     setHighlights(diff.paths, diff.groups);
     renderFiles();
-  } else {
-    clearHighlights();
   }
 }
 
@@ -672,14 +883,16 @@ async function pollTask() {
       state.observedTaskRunning = false;
 
       if (record.status === "done") {
-        setFeedback("success", formatTaskSuccess(taskMeta, record.result || {}));
-        setWorkspaceNotice("success", formatTaskSuccess(taskMeta, record.result || {}));
+        const successMessage = formatTaskSuccess(taskMeta, record.result || {});
+        setFeedback("success", successMessage);
+        setWorkspaceNotice("success", successMessage);
         const origin = taskMeta ? document.querySelector(taskMeta.triggerSelector) : null;
         flashButton(origin, "✓ Done");
         await refreshAll({ highlightChanges: true, taskMeta });
       } else {
-        setFeedback("error", formatTaskError(taskMeta, record.result || {}));
-        setWorkspaceNotice("error", formatTaskError(taskMeta, record.result || {}));
+        const errorMessage = formatTaskError(taskMeta, record.result || {});
+        setFeedback("error", errorMessage);
+        setWorkspaceNotice("error", errorMessage);
         await refreshAll();
       }
 
@@ -766,7 +979,7 @@ function setSettingsStatus(text, tone = "") {
 
 function markSettingsDirty() {
   if (state.busy || state.settingsSaveInFlight) return;
-  setSettingsStatus("Settings changed. Applying soon…", "pending");
+  setSettingsStatus("Settings changed, applying soon…", "pending");
 }
 
 async function saveSettings(trigger = "manual") {
@@ -775,7 +988,7 @@ async function saveSettings(trigger = "manual") {
   updateActionAvailability();
   const button = qs("saveSettingsBtn");
   setButtonWorking(button, true, "Applying…");
-  setSettingsStatus("Applying settings…", "saving");
+  setSettingsStatus("Applying settings…", "pending");
 
   const timezone = qs("timezoneSelect").value;
   const maxWorkers = Math.max(1, Math.min(16, Number(qs("threadsInput").value || "4") || 4));
@@ -791,7 +1004,7 @@ async function saveSettings(trigger = "manual") {
       state.settings = response.settings;
     }
     await refreshAll();
-    setSettingsStatus(`Applied: ${state.settings.timezone}, threads ${state.settings.max_workers}, cutoff ${state.settings.cutoff_hour}.`, "ok");
+    setSettingsStatus(`Applied: ${state.settings.timezone} · threads ${state.settings.max_workers} · cutoff ${state.settings.cutoff_hour}`, "ok");
     if (trigger === "manual") {
       flashButton(button, "✓ Applied");
     }
@@ -820,11 +1033,11 @@ function setAllSelection(checked) {
     if (checked) state.selected.add(path);
     else state.selected.delete(path);
   }
-  renderFiles();
+  refreshSelectionUi();
   if (checked) {
-    flashButton(qs("selectAllBtn"), "✓ All");
+    flashButton(qs("selectAllBtn"), "✓ Selected");
   } else {
-    flashButton(qs("deselectAllBtn"), "✓ Clear");
+    flashButton(qs("deselectAllBtn"), "✓ Cleared");
   }
 }
 
@@ -832,8 +1045,15 @@ function handleFileRowToggle(path, checked) {
   if (!path) return;
   if (checked) state.selected.add(path);
   else state.selected.delete(path);
-  updateActionAvailability();
-  renderFiles();
+  refreshSelectionUi({ animatePaths: checked ? [path] : [] });
+}
+
+function toggleRowSelection(path) {
+  if (!path) return;
+  const checkbox = document.querySelector(`input[type="checkbox"][data-path="${CSS.escape(path)}"]`);
+  if (!checkbox || checkbox.disabled) return;
+  checkbox.checked = !checkbox.checked;
+  handleFileRowToggle(path, checkbox.checked);
 }
 
 function wireFileEvents() {
@@ -859,11 +1079,16 @@ function wireFileEvents() {
     const row = event.target.closest("[data-row-path]");
     if (!row || row.classList.contains("disabled")) return;
     const path = row.getAttribute("data-row-path");
-    if (!path) return;
-    const checkbox = row.querySelector(`input[type="checkbox"][data-path="${CSS.escape(path)}"]`);
-    if (checkbox && !checkbox.disabled) {
-      checkbox.checked = !checkbox.checked;
-      handleFileRowToggle(path, checkbox.checked);
+    toggleRowSelection(path);
+  });
+
+  root.addEventListener("keydown", (event) => {
+    const row = event.target.closest("[data-row-path]");
+    if (!row || row.classList.contains("disabled")) return;
+    if (event.key === " " || event.key === "Enter") {
+      event.preventDefault();
+      const path = row.getAttribute("data-row-path");
+      toggleRowSelection(path);
     }
   });
 }
@@ -884,15 +1109,102 @@ function initPanelControls() {
   }
 }
 
+function initThemeControls() {
+  applyTheme(state.themeMode, { persist: false });
+
+  for (const button of document.querySelectorAll("[data-theme-mode]")) {
+    button.addEventListener("click", () => applyTheme(button.getAttribute("data-theme-mode")));
+  }
+
+  if (window.matchMedia) {
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const listener = () => {
+      if (state.themeMode === "system") applyTheme("system", { persist: false });
+    };
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", listener);
+    } else if (typeof media.addListener === "function") {
+      media.addListener(listener);
+    }
+  }
+}
+
+function initFilterControls() {
+  for (const button of document.querySelectorAll("[data-file-filter]")) {
+    button.addEventListener("click", () => {
+      state.fileFilter = normalizeFileFilter(button.getAttribute("data-file-filter"));
+      writeStorage(FILE_FILTER_STORAGE_KEY, state.fileFilter);
+      renderFiles();
+    });
+  }
+
+  const searchInput = qs("searchInput");
+  const searchClear = qs("searchClearBtn");
+  const syncSearchClear = () => {
+    const hasValue = !!searchInput.value.trim();
+    searchClear.style.visibility = hasValue ? "visible" : "hidden";
+  };
+
+  searchInput.addEventListener("input", () => {
+    state.query = searchInput.value;
+    syncSearchClear();
+    renderFiles();
+  });
+
+  searchClear.addEventListener("click", () => {
+    searchInput.value = "";
+    state.query = "";
+    syncSearchClear();
+    renderFiles();
+    searchInput.focus();
+  });
+
+  syncSearchClear();
+}
+
+function isTypingTarget(target) {
+  if (!target) return false;
+  const tag = target.tagName;
+  return target.isContentEditable || tag === "INPUT" || tag === "TEXTAREA" || tag === "SELECT";
+}
+
+function initKeyboardShortcuts() {
+  document.addEventListener("keydown", (event) => {
+    if (event.defaultPrevented) return;
+
+    const typing = isTypingTarget(event.target);
+    const searchInput = qs("searchInput");
+
+    if ((event.key === "/" && !typing) || ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k")) {
+      event.preventDefault();
+      searchInput.focus();
+      searchInput.select();
+      return;
+    }
+
+    if (event.key === "Escape") {
+      if (document.activeElement === searchInput && searchInput.value) {
+        searchInput.value = "";
+        state.query = "";
+        renderFiles();
+      }
+      qs("organizeConfirmBlock").hidden = true;
+    }
+  });
+}
+
 async function init() {
   initPanelControls();
+  initThemeControls();
+  initFilterControls();
+  initKeyboardShortcuts();
   wireFileEvents();
 
   qs("refreshBtn").addEventListener("click", async (event) => {
     try {
       await refreshAll();
       flashButton(event.currentTarget, "✓ Synced");
-      setWorkspaceNotice("success", "文件列表已刷新。");
+      setWorkspaceNotice("success", "File list refreshed.");
     } catch (error) {
       setFeedback("error", error.message || String(error));
       setWorkspaceNotice("error", error.message || String(error));
@@ -918,12 +1230,12 @@ async function init() {
   qs("silenceBtn").addEventListener("click", (event) => onSilence(event.currentTarget));
 
   qs("detectObsBtn").addEventListener("click", async (event) => {
-    const path = await fetchObsLocation();
+    const path = await fetchObsLocation({ overwriteInput: true });
     if (path) {
       flashButton(event.currentTarget, "✓ Filled");
-      setFeedback("success", "已填入检测到的 OBS 目录。");
+      setFeedback("success", "Detected OBS directory inserted.");
     } else {
-      setFeedback("warning", "没有检测到 OBS 路径，请手动输入。");
+      setFeedback("warning", "OBS path not detected. Enter it manually.");
     }
   });
 
@@ -954,6 +1266,7 @@ async function init() {
 
   updateSettingsInputs();
   setSettingsStatus("Settings loaded.");
+  syncFilterButtons();
 
   try {
     await refreshAll();

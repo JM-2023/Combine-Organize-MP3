@@ -290,6 +290,55 @@
       </div>
     </div>
 
+    <script>
+      const __mockState = {"cwd": "/Users/demo/Audio Session", "settings": {"timezone": "Asia/Shanghai", "max_workers": 4, "cutoff_hour": 4}, "busy": false, "current_task": null};
+      const __mockFiles = {"groups": [{"date_key": "2026-03-28", "display_date": "2026-03-28", "color": "#FFB36A", "files": [{"path": "2026-03-28_09-00-00.mp3", "timestamp": "2026-03-28T09:00:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 183500000, "display": "🎵 2026-03-28_09-00-00.mp3", "time": "09:00:00", "state": "UNPROCESSED", "size": "175.0MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "2026-03-28_09-24-00.mp3", "timestamp": "2026-03-28T09:24:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 162300000, "display": "🎵 2026-03-28_09-24-00.mp3", "time": "09:24:00", "state": "PROCESSED", "size": "154.8MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "20260328 09-00(09-00_09-57).mp3", "timestamp": "2026-03-28T10:05:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 320000000, "display": "📦 20260328 09-00(09-00_09-57).mp3 (output)", "time": "10:05:00", "state": "MERGED_OUTPUT", "size": "305.2MB", "style": "output", "checkable": false, "disabled": true}]}, {"date_key": "2026-03-29", "display_date": "2026-03-29", "color": "#72C8FF", "files": [{"path": "2026-03-29_18-10-00.mp4", "timestamp": "2026-03-29T18:10:00", "format": "mp4", "is_audio": false, "is_video": true, "size_bytes": 612000000, "display": "🎬 2026-03-29_18-10-00.mp4", "time": "18:10:00", "state": "UNPROCESSED", "size": "583.6MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "2026-03-29_18-10-00.mp3", "timestamp": "2026-03-29T18:11:10", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 142300000, "display": "🎵 2026-03-29_18-10-00.mp3", "time": "18:11:10", "state": "PROCESSED", "size": "135.8MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "2026-03-29_18-42-00.mp3", "timestamp": "2026-03-29T18:42:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 89230000, "display": "🎵 2026-03-29_18-42-00.mp3", "time": "18:42:00", "state": "MERGED", "size": "85.1MB", "style": "merged", "checkable": false, "disabled": true}]}, {"date_key": "2026-03-30", "display_date": "2026-03-30", "color": "#8BE0A2", "files": [{"path": "2026-03-30_07-12-00.mp3", "timestamp": "2026-03-30T07:12:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 122300000, "display": "🎵 2026-03-30_07-12-00.mp3", "time": "07:12:00", "state": "PROCESSED", "size": "116.6MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "2026-03-30_07-38-00.mp3", "timestamp": "2026-03-30T07:38:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 97300000, "display": "🎵 2026-03-30_07-38-00.mp3", "time": "07:38:00", "state": "PROCESSED", "size": "92.8MB", "style": "normal", "checkable": true, "disabled": false}, {"path": "2026-03-30_08-02-00.mp3", "timestamp": "2026-03-30T08:02:00", "format": "mp3", "is_audio": true, "is_video": false, "size_bytes": 97300000, "display": "🎵 2026-03-30_08-02-00.mp3", "time": "08:02:00", "state": "CONVERTED", "size": "92.8MB", "style": "converted", "checkable": false, "disabled": true}]}], "stale": false, "generated_at": 0, "timezone": "Asia/Shanghai"};
+      const __mockObs = {"path": "/Users/demo/Movies/OBS"};
+      const __mockTask = {"task_id": null};
+      const __mockSettings = {"timezone": "Asia/Shanghai", "max_workers": 4, "cutoff_hour": 4};
+      window.fetch = async (url, options = {}) => {
+        const path = typeof url === "string" ? url : String(url);
+        let payload = {};
+        if (path.includes("/api/state")) payload = __mockState;
+        else if (path.includes("/api/files")) payload = __mockFiles;
+        else if (path.includes("/api/obs_location")) payload = __mockObs;
+        else if (path.includes("/api/task/current")) payload = __mockTask;
+        else if (path.includes("/api/task/")) payload = __mockTask;
+        else if (path.includes("/api/settings")) payload = { ok: true, settings: __mockSettings };
+        else if (path.includes("/api/task")) payload = { task_id: "preview-task" };
+        return new Response(JSON.stringify(payload), {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        });
+      };
+      window.addEventListener("load", () => {
+        setTimeout(() => {
+          if (window.state) {
+            state.selected = new Set([
+              "2026-03-28_09-24-00.mp3",
+              "2026-03-29_18-10-00.mp4",
+              "2026-03-30_07-12-00.mp3",
+            ]);
+            renderFiles();
+            updateActionAvailability();
+            setTaskPanel({
+              task_id: "preview-merge",
+              status: "done",
+              log: [
+                "Merging 3 files…",
+                "Merge mode: stream copy first, auto fallback to re-encode if needed",
+                "Output created: 20260330 07-12.mp3",
+              ],
+            }, {
+              pillLabel: "Merge",
+              runningLabel: "Merging…",
+              type: "MERGE",
+              triggerSelector: "#mergeBtn",
+            });
+          }
+        }, 120);
+      });
+    </script>
     <script src="./app.js"></script>
   </body>
 </html>
